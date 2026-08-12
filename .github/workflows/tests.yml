@@ -1,0 +1,31 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install optional QR dependency
+        run: python -m pip install "qrcode[pil]>=8,<9"
+      - name: Run offline generation tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Run multiplayer simulation
+        env:
+          BLOOD_GAME_OPEN_BROWSER: "false"
+        run: |
+          python server.py 8137 > server.log 2>&1 &
+          server_pid=$!
+          trap 'kill $server_pid' EXIT
+          sleep 1
+          python tests/sim.py 8137

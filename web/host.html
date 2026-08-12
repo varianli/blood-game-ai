@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>血之游戏 · 主持人</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<!-- ============ 设置 ============ -->
+<div id="setup" class="setup">
+  <div style="text-align:center;padding:10px 0 4px">
+    <a href="/" class="label" style="text-decoration:none;display:inline-block;margin-bottom:10px">← 回首页换玩法</a>
+    <div class="brand" id="gName">血 之 游 戏</div>
+    <div class="note" style="margin-top:8px" id="gDesc">主持人控制台 · 请把这个窗口投到大屏幕</div>
+  </div>
+
+  <div class="card hide" id="triviaBox">
+    <div class="label">出题范围</div>
+    <div class="grid2" style="margin-top:12px">
+      <div class="frow"><span class="label">主题</span>
+        <select class="field" id="topic">
+          <option>综合</option><option>影视</option><option>音乐</option>
+          <option>历史</option><option>地理</option><option>科学</option>
+          <option>体育</option><option>美食</option><option>动漫</option>
+          <option>网络热梗</option>
+        </select></div>
+      <div class="frow"><span class="label">难度</span>
+        <select class="field" id="level">
+          <option>简单</option><option selected>中等</option><option>困难</option>
+        </select></div>
+    </div>
+  </div>
+
+  <div class="card" id="namesBox">
+    <div class="label" id="namesLabel">参与的人物（题目会围绕这些人展开）</div>
+    <div id="names" class="namelist" style="margin:12px 0"></div>
+    <button class="btn ghost" id="addName">+ 加一个人</button>
+  </div>
+
+  <div class="card">
+    <div class="label">节奏</div>
+    <div class="grid2" style="margin-top:12px">
+      <div class="frow" id="infoBox"><span class="label">每条信息停留（秒）</span>
+        <input class="field" id="info_sec" type="number" min="2" max="60" value="8"></div>
+      <div class="frow"><span class="label">每题作答限时（秒）</span>
+        <input class="field" id="question_sec" type="number" min="5" max="180" value="20"></div>
+      <div class="frow"><span class="label">公布答案停留（秒）</span>
+        <input class="field" id="reveal_sec" type="number" min="2" max="60" value="8"></div>
+      <div class="frow"><span class="label">排行榜停留（秒）</span>
+        <input class="field" id="board_sec" type="number" min="2" max="60" value="6"></div>
+      <div class="frow" id="describeBox"><span class="label">轮流描述时间（秒）</span>
+        <input class="field" id="describe_sec" type="number" min="20" max="300" value="90"></div>
+      <div class="frow" id="ninfoBox"><span class="label">信息条数</span>
+        <input class="field" id="n_infos" type="number" min="6" max="60" value="30"></div>
+      <div class="frow"><span class="label" id="qLabel">题目数量</span>
+        <input class="field" id="n_questions" type="number" min="3" max="40" value="15"></div>
+    </div>
+    <label style="display:flex;gap:10px;align-items:center;margin-top:14px;cursor:pointer">
+      <input type="checkbox" id="auto" checked style="width:18px;height:18px">
+      <span>自动进入下一题（不勾选的话，每题看完排名后由你手动点「下一题」）</span>
+    </label>
+  </div>
+
+  <div class="card">
+    <div class="label" id="genBox">题目从哪来</div>
+    <select class="field" id="generator" style="margin-top:12px">
+      <option value="local">本地随机生成（推荐 · 秒出 · 算式一定正确）</option>
+      <option value="polish">本地出数值 + DeepSeek 润色文风（需要余额）</option>
+      <option value="ai">DeepSeek 全量出题（需要余额 · 算术可能出错）</option>
+      <option value="default">内置默认题库（匿名示例人物）</option>
+    </select>
+    <div class="grid2" style="margin-top:12px">
+      <div class="frow"><span class="label">DeepSeek 模型</span>
+        <input class="field" id="model" value="deepseek-v4-flash"></div>
+      <div class="frow"><span class="label">API Key（留空则用 config.json 里的）</span>
+        <input class="field" id="api_key" placeholder="sk-..."></div>
+    </div>
+    <div class="note" style="margin-top:10px">
+      本地生成每次都会换一批人设和数字，题目不会重样，而且答案由代码算出来，
+      不存在大模型算错的问题。选 DeepSeek 时如果调用失败会自动退回本地题库。
+    </div>
+  </div>
+
+  <button class="btn" id="create" style="padding:18px">创建房间，开始</button>
+</div>
+
+<!-- ============ 舞台 ============ -->
+<div id="stage" class="stage hide">
+  <div class="topbar">
+    <span class="pill" id="tGame">血之游戏</span>
+    <span class="pill">房间 <b id="tRoom">----</b></span>
+    <span class="pill" id="tPhase">准备中</span>
+    <span class="pill" id="tCount">0 人</span>
+    <span class="spacer"></span>
+    <button class="btn ghost" id="bPause">暂停</button>
+    <button class="btn ghost" id="bSkip">跳过 →</button>
+    <button class="btn gold hide" id="bNext">下一题</button>
+    <button class="btn ghost" id="bLobby">结束本局</button>
+    <button class="btn ghost" id="bHub">← 游戏厅</button>
+  </div>
+  <div class="center" id="center"></div>
+</div>
+
+<script src="/host.js"></script>
+</body>
+</html>

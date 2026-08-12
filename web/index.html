@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>血之游戏 · 派对游戏厅</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="hub">
+  <header class="hubhead">
+    <div class="brand">血 之 游 戏</div>
+    <div class="sub">投屏 + 手机抢答 · 局域网联机</div>
+  </header>
+
+  <section>
+    <div class="card hide" id="live" style="margin-bottom:16px;display:none;
+         align-items:center;gap:16px;flex-wrap:wrap">
+      <div style="flex:1;min-width:220px">
+        <b style="font-size:19px">房间 <span id="lvRoom" style="color:var(--blood)"></span> 还开着</b>
+        <div class="note" style="margin-top:5px" id="lvInfo"></div>
+      </div>
+      <a class="btn ghost" id="lvBack">回到这个房间</a>
+      <button class="btn ghost" id="lvEnd">解散房间</button>
+    </div>
+
+    <div class="hubbar">
+      <h2 id="pickTitle">选一个玩法</h2>
+      <span class="label" id="pickHint">主持人在这台电脑上选，玩家用手机扫码进来</span>
+    </div>
+    <div class="cards" id="cards"></div>
+  </section>
+
+  <section class="joinhere card">
+    <div>
+      <b style="font-size:20px">我是玩家</b>
+      <div class="note" style="margin-top:6px">
+        手机连同一个 Wi-Fi，扫大屏上的二维码，或者在这里输房间号
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <input class="field" id="code" inputmode="numeric" maxlength="6" placeholder="房间号"
+             style="width:150px;font-size:24px;text-align:center;letter-spacing:6px;font-weight:900">
+      <a class="btn" id="go" href="/p">进入</a>
+    </div>
+  </section>
+
+  <footer class="note" style="text-align:center;padding:10px 0 40px">
+    想加新玩法：改 <code>game/catalog.py</code> 里的 GAMES 就行
+  </footer>
+</div>
+
+<script>
+(function () {
+  var box = document.getElementById('cards');
+  var $ = function (id) { return document.getElementById(id); };
+
+  // 主持人从「← 游戏厅」回来时，房间还开着：这时选玩法应该是「换过去」，
+  // 而不是新开一个房间 —— 否则玩家得重新扫码，整晚总分也断了。
+  var live = null;
+  try {
+    var saved = JSON.parse(localStorage.getItem('xzyx_host') || 'null');
+    if (saved && saved.room) live = saved;
+  } catch (e) { }
+
+  function paint(games) {
+    box.innerHTML = games.map(function (g) {
+      var dis = g.ready ? '' : ' dis';
+      var href = '/host?game=' + encodeURIComponent(g.id) + (live ? '&keep=1' : '');
+      var cur = live && live.game === g.id;
+      return '<a class="gcard' + dis + (cur ? ' cur' : '') + '"' +
+        (g.ready ? ' href="' + href + '"' : '') + '>' +
+        '<div class="gtop"><span class="gemoji">' + g.emoji + '</span>' +
+        '<span class="gtag">' + (cur ? '进行中' : g.tag) + '</span></div>' +
+        '<div class="gname">' + g.name + '</div>' +
+        '<div class="gdesc">' + g.desc + '</div>' +
+        '<div class="gmeta"><span>' + g.players + '</span><span>' + g.time + '</span></div>' +
+        (g.ready
+          ? '<div class="gbtn">' + (cur ? '回到这一局 →'
+              : (live ? '换成这个 →' : '主持这一局 →')) + '</div>'
+          : '<div class="gbtn dim">还没做好</div>') +
+        '</a>';
+    }).join('');
+  }
+
+  fetch('/api/games').then(function (r) { return r.json(); }).then(function (d) {
+    paint(d.games);
+    if (!live) return;
+    // 确认房间真的还在（服务重启过就不算数了）
+    fetch('/api/state?room=' + live.room + '&hk=' + live.hk + '&since=-1')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (s) {
+        if (!s || !s.host) {
+          live = null;
+          try { localStorage.removeItem('xzyx_host'); } catch (e) { }
+          paint(d.games);
+          return;
+        }
+        live.game = s.game;
+        paint(d.games);
+        $('live').style.display = 'flex';
+        $('live').classList.remove('hide');
+        $('lvRoom').textContent = s.room;
+        $('lvInfo').textContent = '正在玩「' + s.game_name + '」· ' + s.count + ' 人在线' +
+          (s.played && s.played.length ? '　今晚已玩过：' + s.played.join('、') : '') +
+          '　—— 选别的玩法会直接换过去，玩家不用重新扫码，总分接着累加。';
+        $('lvBack').href = '/host?game=' + encodeURIComponent(s.game);
+        $('pickTitle').textContent = '换一个玩法';
+        $('pickHint').textContent = '选中的玩法会换到房间 ' + s.room + '，玩家留在原地';
+        $('lvEnd').onclick = function () {
+          try { localStorage.removeItem('xzyx_host'); } catch (e) { }
+          location.reload();
+        };
+      }).catch(function () { });
+  }).catch(function () {
+    box.innerHTML = '<div class="note">读不到游戏列表，服务是不是没跑起来？</div>';
+  });
+
+  var code = document.getElementById('code'), go = document.getElementById('go');
+  function sync() {
+    go.href = '/p' + (code.value.trim() ? '?room=' + encodeURIComponent(code.value.trim()) : '');
+  }
+  code.addEventListener('input', sync);
+  code.addEventListener('keydown', function (e) { if (e.key === 'Enter') go.click(); });
+})();
+</script>
+</body>
+</html>
