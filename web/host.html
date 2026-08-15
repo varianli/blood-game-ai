@@ -16,8 +16,14 @@
     <div class="note" style="margin-top:8px" id="gDesc">主持人控制台 · 请把这个窗口投到大屏幕</div>
   </div>
 
-  <div class="card hide" id="triviaBox">
-    <div class="label">出题范围</div>
+  <div class="card trivia-config hide" id="triviaBox">
+    <div class="config-head">
+      <div>
+        <div class="label">知识问答设置</div>
+        <div class="config-title">题目范围与难度</div>
+      </div>
+      <span class="config-badge">严格分级</span>
+    </div>
     <div class="grid2" style="margin-top:12px">
       <div class="frow"><span class="label">主题</span>
         <select class="field" id="topic">
@@ -28,9 +34,12 @@
         </select></div>
       <div class="frow"><span class="label">难度</span>
         <select class="field" id="level">
-          <option>简单</option><option selected>中等</option><option>困难</option>
+          <option value="简单">简单 · 常识热身</option>
+          <option value="中等" selected>中等 · 知识挑战</option>
+          <option value="困难">困难 · 高手竞赛</option>
         </select></div>
     </div>
+    <div class="level-help" id="levelHelp"></div>
   </div>
 
   <div class="card" id="namesBox">
@@ -39,16 +48,24 @@
     <button class="btn ghost" id="addName">+ 加一个人</button>
   </div>
 
-  <div class="card">
-    <div class="label">节奏</div>
+  <div class="card timing-config">
+    <div class="config-head">
+      <div>
+        <div class="label" id="timingTitle">玩法节奏</div>
+        <div class="timing-hint" id="timingHint">每一阶段都可以按现场节奏调整。</div>
+      </div>
+    </div>
+    <div class="timing-flow hide" id="triviaTimingFlow">
+      <span>① 限时作答</span><i>→</i><span>② 公布答案</span><i>→</i><span>③ 实时排行</span>
+    </div>
     <div class="grid2" style="margin-top:12px">
       <div class="frow" id="infoBox"><span class="label">每条信息停留（秒）</span>
         <input class="field" id="info_sec" type="number" min="2" max="60" value="8"></div>
-      <div class="frow"><span class="label">每题作答限时（秒）</span>
+      <div class="frow timing-field"><span class="label">每题作答限时（秒）</span>
         <input class="field" id="question_sec" type="number" min="5" max="180" value="20"></div>
-      <div class="frow"><span class="label">公布答案停留（秒）</span>
+      <div class="frow timing-field"><span class="label">公布答案停留（秒）</span>
         <input class="field" id="reveal_sec" type="number" min="2" max="60" value="8"></div>
-      <div class="frow"><span class="label">排行榜停留（秒）</span>
+      <div class="frow timing-field"><span class="label">排行榜停留（秒）</span>
         <input class="field" id="board_sec" type="number" min="2" max="60" value="6"></div>
       <div class="frow" id="describeBox"><span class="label">轮流描述时间（秒）</span>
         <input class="field" id="describe_sec" type="number" min="20" max="300" value="90"></div>
@@ -63,23 +80,43 @@
     </label>
   </div>
 
-  <div class="card">
-    <div class="label" id="genBox">题目从哪来</div>
+  <div class="card" id="sourceBox">
+    <div class="label" id="genBox">Memory 出题方式</div>
     <select class="field" id="generator" style="margin-top:12px">
       <option value="local">本地随机生成（推荐 · 秒出 · 算式一定正确）</option>
       <option value="polish">本地出数值 + DeepSeek 润色文风（需要余额）</option>
       <option value="ai">DeepSeek 全量出题（需要余额 · 算术可能出错）</option>
       <option value="default">内置默认题库（匿名示例人物）</option>
     </select>
-    <div class="grid2" style="margin-top:12px">
-      <div class="frow"><span class="label">DeepSeek 模型</span>
-        <input class="field" id="model" value="deepseek-v4-flash"></div>
-      <div class="frow"><span class="label">API Key（留空则用 config.json 里的）</span>
-        <input class="field" id="api_key" placeholder="sk-..."></div>
-    </div>
     <div class="note" style="margin-top:10px">
       本地生成每次都会换一批人设和数字，题目不会重样，而且答案由代码算出来，
-      不存在大模型算错的问题。选 DeepSeek 时如果调用失败会自动退回本地题库。
+      不存在大模型算错的问题。AI 选项会使用下方的房间 AI 设置。
+    </div>
+  </div>
+
+  <div class="card room-ai-config" id="roomAiBox">
+    <div class="config-head">
+      <div>
+        <div class="label">ROOM AI</div>
+        <div class="config-title">房间 AI 设置</div>
+      </div>
+      <span class="config-badge">全玩法共用</span>
+    </div>
+    <div class="grid2" style="margin-top:12px">
+      <div class="frow"><span class="label">DeepSeek 模型</span>
+        <input class="field" id="model" maxlength="100" value="deepseek-v4-flash"></div>
+      <div class="frow"><span class="label">API Key</span>
+        <input class="field" id="api_key" type="password" maxlength="512"
+               autocomplete="off" spellcheck="false"
+               placeholder="sk-...（留空则使用启动配置）"></div>
+    </div>
+    <div class="room-ai-uses" aria-label="可使用房间 AI 的玩法">
+      <span>Memory AI</span><span>知识抢答</span><span>谁最可能</span>
+      <span>卧底找茬</span><span>你画我猜</span>
+    </div>
+    <div class="note" style="margin-top:10px">
+      输入一次，本房间所有 AI 玩法共用。本页输入的密钥只保存在服务端内存，
+      不会发送给玩家，也不会写入浏览器存储；房间消失后自动清除。
     </div>
   </div>
 
@@ -100,7 +137,17 @@
     <button class="btn ghost" id="bLobby">结束本局</button>
     <button class="btn ghost" id="bHub">← 游戏厅</button>
   </div>
-  <div class="center" id="center"></div>
+  <div class="stage-main">
+    <div class="center" id="center"></div>
+    <aside id="liveRanking" class="live-ranking" aria-live="polite"
+           aria-label="实时排行榜">
+      <div class="live-ranking-head">
+        <div><span class="live-dot"></span>实时排行榜</div>
+        <span class="live-ranking-count">0 人</span>
+      </div>
+      <div class="live-ranking-empty">玩家加入后，排名会在这里实时更新</div>
+    </aside>
+  </div>
 </div>
 
 <script src="/host.js"></script>

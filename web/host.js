@@ -3,6 +3,7 @@
   var DEFAULT_NAMES = ['林岚', '周澈', '陈星', '苏禾', '顾言', '唐悦'];
   var $ = function (id) { return document.getElementById(id); };
   var room = null, hk = null, joinUrl = '', offset = 0, S = null, lastV = -1;
+  var roomAiDraft = { key: '', model: '', open: false };
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -20,6 +21,12 @@
     d.className = 'toast'; d.textContent = msg;
     document.body.appendChild(d);
     setTimeout(function () { d.remove(); }, 4000);
+  }
+  function showQrUnavailable() {
+    var box = $('qr');
+    if (!box) return;
+    box.innerHTML = '<div class="qr-missing">二维码暂时无法生成' +
+      '<span>请让玩家直接输入右侧网址</span></div>';
   }
 
   /* ---------------- 名单编辑 ---------------- */
@@ -47,6 +54,17 @@
 
   var gameId = new URLSearchParams(location.search).get('game') || 'classic';
   var kind = 'deduce';
+  var LEVEL_HELP = {
+    '简单': '常识热身：多数普通成年人可以直接回忆作答，适合第一次参与。',
+    '中等': '知识挑战：需要扎实通识或一步联想，干扰项来自相邻概念。',
+    '困难': '高手竞赛：至少六成题考精确细节或两步联想，并自动过滤送分题。'
+  };
+  function syncLevelHint() {
+    $('levelHelp').textContent = LEVEL_HELP[$('level').value] || '';
+  }
+  $('level').onchange = syncLevelHint;
+  syncLevelHint();
+
   fetch('/api/games').then(function (r) { return r.json(); }).then(function (d) {
     var g = (d.games || []).filter(function (x) { return x.id === gameId; })[0];
     if (!g) return;
@@ -57,13 +75,20 @@
     Object.keys(g.preset || {}).forEach(function (k) {
       if ($(k)) $(k).value = g.preset[k];
     });
+    syncLevelHint();
     // 各玩法用得上的设置不一样，藏掉用不上的
-    $('triviaBox').classList.toggle('hide', kind !== 'trivia');
-    $('namesBox').classList.toggle('hide', kind === 'trivia' || kind === 'draw');
+    var trivia = kind === 'trivia';
+    $('triviaBox').classList.toggle('hide', !trivia);
+    $('triviaTimingFlow').classList.toggle('hide', !trivia);
+    $('timingTitle').textContent = trivia ? '知识问答 · 各环节时间' : '玩法节奏';
+    $('timingHint').textContent = trivia
+      ? '作答、公布答案与实时排行榜的停留时间都可以单独调整。'
+      : '每一阶段都可以按现场节奏调整。';
+    $('namesBox').classList.toggle('hide', trivia || kind === 'draw');
     $('infoBox').classList.toggle('hide', kind !== 'deduce');
     $('ninfoBox').classList.toggle('hide', kind !== 'deduce');
     $('describeBox').classList.toggle('hide', kind !== 'undercover');
-    $('generator').parentNode.classList.toggle('hide', kind !== 'deduce');
+    $('sourceBox').classList.toggle('hide', kind !== 'deduce');
     if (kind === 'vote')
       $('namesLabel').textContent = '参与的人（出题时会参考，实际投票用的是进房间的玩家）';
     var qLabel = { trivia: '题目数量', vote: '题目数量',
@@ -95,6 +120,7 @@
     $('create').disabled = true;
     post('/api/host/create', settingsPayload()).then(function (r) {
       room = r.room; hk = r.hk;
+      $('api_key').value = '';
       joinUrl = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
         ? (r.join && r.join[0]) || (location.origin + '/p?room=' + room)
         : location.origin + '/p?room=' + room;
@@ -218,6 +244,7 @@
     $('bSkip').classList.toggle('hide', s.phase === 'lobby');
     $('bNext').classList.toggle('hide',
       !(s.phase === 'scoreboard' && !s.settings.auto));
+    renderLiveRanking(s);
 
     if (s.phase === 'lobby') return renderLobby(c, s);
     if (s.kind === 'draw' && s.draw) return renderDraw(c, s);
@@ -232,6 +259,28 @@
     if (s.phase === 'reveal') return renderQuestion(c, s, true);
     if (s.phase === 'scoreboard') return renderBoard(c, s, false);
     if (s.phase === 'final') return renderBoard(c, s, true);
+  }
+
+  function renderLiveRanking(s) {
+    var panel = $('liveRanking');
+    if (!panel) return;
+    var board = s.board || [];
+    var rows = board.map(function (p) {
+      var crown = p.rank === 1 ? '👑' : p.rank;
+      return '<div class="live-rank-row rank-' + p.rank +
+        (p.online ? '' : ' offline') + '">' +
+        '<span class="live-rank-no">' + crown + '</span>' +
+        '<span class="live-rank-name">' + esc(p.name) + '</span>' +
+        (p.gain ? '<span class="live-rank-gain">+' + p.gain + '</span>' : '') +
+        '<strong>' + p.score + '</strong></div>';
+    }).join('');
+
+    panel.innerHTML =
+      '<div class="live-ranking-head"><div><span class="live-dot"></span>' +
+      '实时排行榜</div><span class="live-ranking-count">' + s.count +
+      ' 人</span></div>' +
+      (rows ? '<div class="live-ranking-list">' + rows + '</div>' :
+        '<div class="live-ranking-empty">玩家加入后，排名会在这里实时更新</div>');
   }
 
   // 下一套题的预生成状态（只有 DeepSeek 模式才会预生成）
@@ -249,7 +298,46 @@
     return '';
   }
 
+  function roomAiPanel(s) {
+    var configured = !!s.api_key_set;
+    var source = '尚未生成题库';
+    var sourceClass = 'idle';
+    if (s.set_source === 'deepseek') {
+      source = '当前题库：DeepSeek';
+      sourceClass = 'ok';
+    } else if (s.set_source) {
+      source = s.difficulty_guaranteed === false
+        ? '当前题库：基础兜底 · 难度已降级'
+        : '当前题库：本地生成';
+      sourceClass = s.difficulty_guaranteed === false ? 'warn' : 'ok';
+    }
+    return '<details class="room-ai-panel" id="roomAiPanel"' +
+      (roomAiDraft.open ? ' open' : '') + '>' +
+      '<summary><span>房间 AI 设置</span>' +
+      '<span class="ai-state ' + (configured ? 'ok' : 'idle') + '">' +
+      (configured ? '密钥已配置' : '尚未配置密钥') + '</span>' +
+      '<span class="ai-source ' + sourceClass + '">' + esc(source) + '</span></summary>' +
+      '<div class="room-ai-panel-body"><div class="grid2">' +
+      '<label class="frow"><span class="label">DeepSeek 模型</span>' +
+      '<input class="field" id="roomAiModel" maxlength="100"></label>' +
+      '<label class="frow"><span class="label">更新 API Key</span>' +
+      '<input class="field" id="roomApiKey" type="password" maxlength="512" ' +
+      'autocomplete="off" spellcheck="false" placeholder="sk-...（不回显已保存密钥）"></label>' +
+      '</div><div class="note">密钥只保存在这个房间的服务端内存中，不会发送给玩家，' +
+      '也不会写入浏览器存储。</div>' +
+      '<button class="btn ghost" id="saveRoomAi">保存并重新出题</button></div></details>';
+  }
+
+  function captureRoomAiDraft() {
+    var panel = $('roomAiPanel');
+    if (!panel) return;
+    roomAiDraft.open = panel.open;
+    if ($('roomAiModel')) roomAiDraft.model = $('roomAiModel').value;
+    if ($('roomApiKey')) roomAiDraft.key = $('roomApiKey').value;
+  }
+
   function renderLobby(c, s) {
+    captureRoomAiDraft();
     var busy = s.gen.status === 'running';
     c.innerHTML =
       '<div class="roomcode">' + esc(s.room) + '</div>' +
@@ -269,6 +357,7 @@
       (busy ? '<span id="genSec"></span>' : '') +
       (s.has_set ? '　·　' + esc(s.set_title) + '（' + s.n_info_total +
         ' 条信息 / ' + s.n_q_total + ' 道题）' : '') + '</div>' +
+      roomAiPanel(s) +
       nextTag(s) +
       '<div style="display:flex;gap:14px;flex-wrap:wrap;justify-content:center">' +
       '<button class="btn ghost" id="bGen"' + (busy ? ' disabled' : '') + '>换一套题</button>' +
@@ -298,18 +387,63 @@
         };
       }).catch(function () { });
     }
+    var aiPanel = $('roomAiPanel');
+    var aiModel = $('roomAiModel');
+    var aiKey = $('roomApiKey');
+    if (aiPanel) {
+      aiPanel.open = roomAiDraft.open;
+      aiPanel.ontoggle = function () { roomAiDraft.open = aiPanel.open; };
+    }
+    if (aiModel) {
+      aiModel.value = roomAiDraft.model || s.settings.model || '';
+      aiModel.oninput = function () { roomAiDraft.model = aiModel.value; };
+    }
+    if (aiKey) {
+      aiKey.value = roomAiDraft.key;
+      aiKey.oninput = function () { roomAiDraft.key = aiKey.value; };
+    }
+    $('saveRoomAi').onclick = function () {
+      var key = aiKey.value.trim();
+      var model = aiModel.value.trim();
+      if (!key && !s.api_key_set) {
+        toast('请先输入 API Key，或在启动配置中设置');
+        aiKey.focus();
+        return;
+      }
+      var payload = { model: model };
+      if (key) payload.api_key = key;
+      $('saveRoomAi').disabled = true;
+      act('settings', payload).then(function () {
+        roomAiDraft.model = model;
+        roomAiDraft.key = '';
+        aiKey.value = '';
+        return act('generate');
+      }).then(function () {
+        toast('房间 AI 设置已保存，正在重新出题');
+      }).catch(function () {
+        $('saveRoomAi').disabled = false;
+        toast('保存失败，请检查服务是否仍在运行');
+      });
+    };
     $('bGen').onclick = function () { act('generate'); };
-    $('bStart').onclick = function () { act('start'); };
+    $('bStart').onclick = function () {
+      roomAiDraft.key = '';
+      act('start');
+    };
     fetch('/api/qr?t=' + encodeURIComponent(joinUrl))
       .then(function (r) { return r.ok ? r.text() : ''; })
-      .then(function (svg) { if (svg && $('qr')) $('qr').innerHTML = svg; })
-      .catch(function () { });
+      .then(function (svg) {
+        if (svg && /^\s*<svg[\s>]/i.test(svg) && $('qr')) $('qr').innerHTML = svg;
+        else showQrUnavailable();
+      })
+      .catch(showQrUnavailable);
   }
 
   function renderBriefing(c, s) {
     var i = s.info || { i: 0, total: 1, text: '' };
     c.innerHTML =
-      '<div class="infocard"><div class="no">信息 ' + i.i + ' / ' + i.total + '</div>' +
+      '<div class="infocard timed-card">' + ring('rg', true) +
+      '<div class="no">信息 ' + i.i + ' / ' + i.total + '</div>' +
       '<div class="txt">' + esc(i.text) + '</div></div>' +
       '<div class="progress"><i style="width:' +
       (i.i / Math.max(1, i.total) * 100) + '%"></i></div>' +
@@ -332,12 +466,10 @@
     };
   }
 
-  function ring(id) {
-    return '<div class="ring"><svg width="130" height="130">' +
-      '<circle cx="65" cy="65" r="56" fill="none" stroke="#2a1119" stroke-width="14"/>' +
-      '<circle id="' + id + '" cx="65" cy="65" r="56" fill="none" stroke="#e01e37" ' +
-      'stroke-width="14" stroke-linecap="round" stroke-dasharray="351.8" ' +
-      'stroke-dashoffset="0"/></svg><div class="num" id="' + id + 'n">–</div></div>';
+  function ring(id, corner) {
+    return '<div class="ring' + (corner ? ' ring-corner' : '') + '" id="' + id +
+      '" role="timer" aria-label="本阶段倒计时">' +
+      '<div class="num" id="' + id + 'n">–</div></div>';
   }
 
   function renderQuestion(c, s, revealed) {
@@ -352,10 +484,9 @@
     }).join('');
 
     c.innerHTML =
-      '<div style="display:flex;align-items:center;gap:30px;width:min(1250px,94vw)">' +
-      '<div style="flex:1"><div class="label">第 ' + q.no + ' / ' + q.total + ' 题</div>' +
+      '<div class="question-card timed-card">' + ring('rg', true) +
+      '<div class="label">第 ' + q.no + ' / ' + q.total + ' 题</div>' +
       '<div class="qtext" style="text-align:left;margin-top:8px">' + esc(q.text) + '</div></div>' +
-      ring('rg') + '</div>' +
       '<div class="opts">' + opts + '</div>' +
       (revealed
         ? '<div class="explain"><div class="h">✔ 正确答案：' + 'ABCD'[rv.answer] +
@@ -376,10 +507,9 @@
   function renderVoteAsk(c, s) {
     var q = s.q || {};
     c.innerHTML =
-      '<div style="display:flex;align-items:center;gap:30px;width:min(1250px,94vw)">' +
-      '<div style="flex:1"><div class="label">第 ' + q.no + ' / ' + q.total + ' 题</div>' +
+      '<div class="question-card timed-card">' + ring('rg', true) +
+      '<div class="label">第 ' + q.no + ' / ' + q.total + ' 题</div>' +
       '<div class="qtext" style="text-align:left;margin-top:8px">' + esc(q.text) + '</div></div>' +
-      ring('rg') + '</div>' +
       '<div class="chips" style="gap:14px">' + (s.candidates || []).map(function (x) {
         return '<span class="chip" style="font-size:26px;padding:14px 26px">' +
           esc(x.name) + '</span>';
@@ -414,21 +544,23 @@
   function renderAssign(c, s) {
     c.innerHTML =
       '<div class="label">第 ' + (s.round ? s.round.no + ' / ' + s.round.total : '') + ' 轮</div>' +
-      '<div class="infocard"><div class="no">看自己的手机</div>' +
+      '<div class="infocard timed-card">' + ring('rg', true) +
+      '<div class="no">看自己的手机</div>' +
       '<div class="txt">每个人手机上都收到了一个词<br>' +
       '<span style="color:var(--blood)">其中一个人拿到的不一样</span></div></div>' +
-      '<div class="note">大屏不会显示任何词 —— 免得剧透</div>' + ring('rg');
+      '<div class="note">大屏不会显示任何词 —— 免得剧透</div>';
   }
 
   function renderDescribe(c, s) {
     c.innerHTML =
       '<div class="label">第 ' + (s.round ? s.round.no + ' / ' + s.round.total : '') + ' 轮 · 轮流描述</div>' +
-      '<div class="infocard"><div class="txt">按座位顺序，<br>每人用一句话描述自己的词</div></div>' +
+      '<div class="infocard timed-card">' + ring('rg', true) +
+      '<div class="txt">按座位顺序，<br>每人用一句话描述自己的词</div></div>' +
       '<div class="chips" style="gap:12px">' + s.board.map(function (p) {
         return '<span class="chip" style="font-size:24px;padding:12px 22px">' +
           esc(p.name) + '</span>';
       }).join('') + '</div>' +
-      '<div class="note">不能直接说出那个词　·　时间到自动进入投票</div>' + ring('rg');
+      '<div class="note">不能直接说出那个词　·　时间到自动进入投票</div>';
   }
 
   function renderUcReveal(c, s) {
@@ -471,12 +603,12 @@
     if (lastRound !== d.no) {
       lastRound = d.no; strokeSince = 0;
       c.innerHTML =
-        '<div style="display:flex;align-items:center;gap:24px;width:min(1250px,94vw)">' +
-        '<div style="flex:1"><div class="label">第 ' + d.no + ' / ' + d.total + ' 幅</div>' +
+        '<div class="question-card timed-card">' + ring('rg', true) +
+        '<div class="label">第 ' + d.no + ' / ' + d.total + ' 幅</div>' +
         '<div style="font-size:clamp(22px,2.6vw,40px);font-weight:800;margin-top:6px">' +
         '✏️ ' + esc(d.drawer_name) + ' 正在画' +
         '<span style="color:var(--muted);font-size:.6em">　（答案：' +
-        esc(d.word || '') + '）</span></div></div>' + ring('rg') + '</div>' +
+        esc(d.word || '') + '）</span></div></div>' +
         '<div style="display:flex;gap:22px;align-items:flex-start;width:min(1250px,94vw)">' +
         '<canvas id="hcv" class="hostcv"></canvas>' +
         '<div class="feedbox" id="hfeed"></div></div>';
@@ -581,18 +713,21 @@
 
   setInterval(function () {
     if (!S) return;
-    var n = $('rgn'), circ = $('rg');
+    var n = $('rgn'), timer = $('rg');
     if (n) {
       var ms = remain();
-      if (ms === null) { n.textContent = S.paused ? '⏸' : '–'; }
+      if (ms === null) {
+        n.textContent = S.paused ? '⏸' : '–';
+        if (timer) timer.style.setProperty('--timer-progress', '0%');
+      }
       else {
         var sec = Math.ceil(ms / 1000);
         n.textContent = sec;
-        n.style.color = sec <= 5 ? '#e01e37' : '#f7ecef';
-        if (circ) {
+        if (timer) {
           var frac = Math.min(1, ms / (S.phase_sec * 1000 || 1));
-          circ.setAttribute('stroke-dashoffset', String(351.8 * (1 - frac)));
-          circ.setAttribute('stroke', sec <= 5 ? '#e01e37' : '#f2c14e');
+          timer.style.setProperty('--timer-progress', Math.min(99, frac * 100) + '%');
+          timer.classList.toggle('urgent', sec <= 5);
+          timer.setAttribute('aria-label', '剩余 ' + sec + ' 秒');
         }
       }
     }

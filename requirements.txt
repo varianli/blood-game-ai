@@ -1,1 +1,1 @@
-qrcode[pil]>=8,<9
+qrcode>=8,<9

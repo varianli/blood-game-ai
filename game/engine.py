@@ -142,8 +142,10 @@ class Room(object):
     def sig(self):
         """出题相关的设置指纹 —— 改了名单/模式，预生成的那套就作废。"""
         s = self.settings
-        return (tuple(s.get("names") or ()), s.get("generator"),
-                s.get("n_infos"), s.get("n_questions"), s.get("model"))
+        return (self.game, tuple(s.get("names") or ()), s.get("generator"),
+                s.get("n_infos"), s.get("n_questions"), s.get("model"),
+                s.get("topic"), s.get("level"),
+                hash(s.get("api_key") or ""))
 
     def _build(self):
         """按当前设置造一套题，失败直接抛出去。"""
@@ -348,9 +350,9 @@ class Room(object):
                 if "auto" in payload:
                     self.settings["auto"] = bool(payload["auto"])
                 if payload.get("api_key"):
-                    self.settings["api_key"] = str(payload["api_key"]).strip()
+                    self.settings["api_key"] = str(payload["api_key"]).strip()[:512]
                 if payload.get("model"):
-                    self.settings["model"] = str(payload["model"]).strip()
+                    self.settings["model"] = str(payload["model"]).strip()[:100]
                 self.touch()
             elif action == "switch_game":
                 gid = str(payload.get("game") or "")
@@ -622,6 +624,9 @@ class Room(object):
                              if k in s},
                 "has_set": bool(self.set),
                 "set_title": (self.set or {}).get("title", ""),
+                "set_source": (self.set or {}).get("source", ""),
+                "difficulty_guaranteed":
+                    (self.set or {}).get("difficulty_guaranteed"),
                 "n_info_total": len((self.set or {}).get("infos", [])),
                 "n_q_total": len((self.set or {}).get("questions", [])),
             }

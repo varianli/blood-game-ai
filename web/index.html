@@ -6,9 +6,10 @@
 <title>血之游戏 · 派对游戏厅</title>
 <link rel="stylesheet" href="/app.css">
 </head>
-<body>
-<div class="hub">
+<body class="hall-page">
+<div class="hub home-atmosphere">
   <header class="hubhead">
+    <div class="hub-kicker">BLOODGAME · PARTY ARENA</div>
     <div class="brand">血 之 游 戏</div>
     <div class="sub">投屏 + 手机抢答 · 局域网联机</div>
   </header>
@@ -28,6 +29,17 @@
       <h2 id="pickTitle">选一个玩法</h2>
       <span class="label" id="pickHint">主持人在这台电脑上选，玩家用手机扫码进来</span>
     </div>
+    <div class="memory-series" id="memorySeries">
+      <div class="series-head">
+        <div>
+          <div class="series-eyebrow">MEMORY SERIES</div>
+          <h3>Memory 挑战阶梯</h3>
+        </div>
+        <div class="series-copy">从短局热身到高压记忆，沿着 1—3 级逐步挑战</div>
+      </div>
+      <div class="memory-steps" id="memoryCards"></div>
+    </div>
+
     <div class="cards" id="cards"></div>
   </section>
 
@@ -63,24 +75,59 @@
     if (saved && saved.room) live = saved;
   } catch (e) { }
 
+  function gameHref(g) {
+    return '/host?game=' + encodeURIComponent(g.id) + (live ? '&keep=1' : '');
+  }
+
+  function actionText(g, cur) {
+    if (!g.ready) return '<div class="gbtn dim">还没做好</div>';
+    return '<div class="gbtn">' + (cur ? '回到这一局 →'
+      : (live ? '换成这个 →' : '主持这一局 →')) + '</div>';
+  }
+
+  function difficultyMeter(tier) {
+    return '<span class="difficulty-meter" aria-label="挑战等级 ' + tier + ' / 3">' +
+      [1, 2, 3].map(function (n) {
+        return '<i' + (n <= tier ? ' class="on"' : '') + '></i>';
+      }).join('') + '</span>';
+  }
+
+  function memoryCard(g) {
+    var cur = live && live.game === g.id;
+    var p = g.preset || {};
+    return '<a class="gcard memory-card tier-' + g.tier + (cur ? ' cur' : '') + '"' +
+      (g.ready ? ' href="' + gameHref(g) + '"' : '') + '>' +
+      '<div class="memory-step-head"><span class="step-number">0' + g.tier + '</span>' +
+      '<span class="step-name">' + (cur ? '进行中' : g.tier_name) + '</span></div>' +
+      '<div class="gtop"><span class="gemoji">' + g.emoji + '</span>' +
+      '<span class="challenge-label">挑战强度 ' + difficultyMeter(g.tier) + '</span></div>' +
+      '<div class="gname">' + g.name + '</div>' +
+      '<div class="gdesc">' + g.desc + '</div>' +
+      '<div class="memory-stats"><span><b>' + p.n_infos + '</b> 条信息</span>' +
+      '<span><b>' + p.n_questions + '</b> 道题</span>' +
+      '<span><b>' + p.info_sec + '</b> 秒/条</span></div>' +
+      '<div class="gmeta"><span>' + g.players + '</span><span>' + g.time + '</span></div>' +
+      actionText(g, cur) + '</a>';
+  }
+
+  function gameCard(g) {
+    var dis = g.ready ? '' : ' dis';
+    var cur = live && live.game === g.id;
+    return '<a class="gcard' + dis + (cur ? ' cur' : '') + '"' +
+      (g.ready ? ' href="' + gameHref(g) + '"' : '') + '>' +
+      '<div class="gtop"><span class="gemoji">' + g.emoji + '</span>' +
+      '<span class="gtag">' + (cur ? '进行中' : g.tag) + '</span></div>' +
+      '<div class="gname">' + g.name + '</div>' +
+      '<div class="gdesc">' + g.desc + '</div>' +
+      '<div class="gmeta"><span>' + g.players + '</span><span>' + g.time + '</span></div>' +
+      actionText(g, cur) + '</a>';
+  }
+
   function paint(games) {
-    box.innerHTML = games.map(function (g) {
-      var dis = g.ready ? '' : ' dis';
-      var href = '/host?game=' + encodeURIComponent(g.id) + (live ? '&keep=1' : '');
-      var cur = live && live.game === g.id;
-      return '<a class="gcard' + dis + (cur ? ' cur' : '') + '"' +
-        (g.ready ? ' href="' + href + '"' : '') + '>' +
-        '<div class="gtop"><span class="gemoji">' + g.emoji + '</span>' +
-        '<span class="gtag">' + (cur ? '进行中' : g.tag) + '</span></div>' +
-        '<div class="gname">' + g.name + '</div>' +
-        '<div class="gdesc">' + g.desc + '</div>' +
-        '<div class="gmeta"><span>' + g.players + '</span><span>' + g.time + '</span></div>' +
-        (g.ready
-          ? '<div class="gbtn">' + (cur ? '回到这一局 →'
-              : (live ? '换成这个 →' : '主持这一局 →')) + '</div>'
-          : '<div class="gbtn dim">还没做好</div>') +
-        '</a>';
-    }).join('');
+    var memory = games.filter(function (g) { return g.series === 'memory'; });
+    var others = games.filter(function (g) { return g.series !== 'memory'; });
+    $('memoryCards').innerHTML = memory.map(memoryCard).join('');
+    box.innerHTML = others.map(gameCard).join('');
   }
 
   fetch('/api/games').then(function (r) { return r.json(); }).then(function (d) {
