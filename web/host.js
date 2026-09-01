@@ -310,7 +310,8 @@
   function nextTag(s) {
     var n = s.next_gen || {};
     if (n.status === 'running')
-      return '<div class="note" id="preNote">⏳ 后台正在预生成下一套题' +
+      return '<div class="note" id="preNote">⏳ ' +
+        esc(n.msg || '后台正在预生成下一套题') +
         '<span id="preSec"></span></div>';
     if (n.status === 'ok' || s.next_ready)
       return '<div class="note" style="color:var(--ok)">✔ 下一套题已就绪，' +
@@ -518,7 +519,8 @@
       captureMemoryDraft();
       captureRoomAiDraft();
     }
-    var busy = s.gen.status === 'running';
+    var waitingForNext = !!s.start_pending;
+    var busy = s.gen.status === 'running' || waitingForNext;
     var memoryNeedsSet = isMemoryGame(s.game) && !s.has_set;
     c.innerHTML =
       '<div class="roomcode">' + esc(s.room) + '</div>' +
@@ -534,8 +536,9 @@
         ? '<div class="note">今晚已经玩过：' + esc(s.played.join('、')) +
           '　（总分累计中）</div>' : '') +
       '<div class="note" style="text-align:center" id="genNote">' +
-      (busy ? '⏳ ' : '') + esc(s.gen.msg || '还没生成题库') +
-      (busy ? '<span id="genSec"></span>' : '') +
+      (waitingForNext ? '⏳ 新题生成后会自动开始' :
+        ((busy ? '⏳ ' : '') + esc(s.gen.msg || '还没生成题库') +
+         (busy ? '<span id="genSec"></span>' : ''))) +
       (s.has_set ? '　·　' + esc(s.set_title) + '（' + s.n_info_total +
         ' 条信息 / ' + s.n_q_total + ' 道题）' : '') + '</div>' +
       memorySettingsPanel(s) +
@@ -552,7 +555,8 @@
       '<button class="btn ghost" id="bGen"' + (busy ? ' disabled' : '') + '>换一套题</button>' +
       '<button class="btn" id="bStart"' + ((busy || memoryNeedsSet) ? ' disabled' : '') +
       ' style="padding:18px 44px;font-size:24px">' +
-      (memoryNeedsSet ? '请先确认 Memory 设置' : '开始游戏') + '</button></div>';
+      (memoryNeedsSet ? '请先确认 Memory 设置' :
+        (waitingForNext ? '新题生成后自动开始…' : '开始游戏')) + '</button></div>';
 
     var chips = $('chips');
     if (!s.board.length) {

@@ -189,6 +189,35 @@ class Room(object):
         else:
             self.touch()
 
+    def _clear_next(self):
+        """清空预生成槽位。调用前必须持有锁。"""
+        self.next_set = None
+        self.next_msg = ""
+        self.next_sig = None
+        self.next_gen = {"status": "idle", "msg": ""}
+
+    def _take_next(self):
+        """取出与当前设置匹配的下一套；过期内容直接丢弃。"""
+        if self.next_set is None:
+            return None
+        if self.next_sig != self.sig():
+            self._clear_next()
+            return None
+        prepared = self.next_set, self.next_msg
+        self._clear_next()
+        return prepared
+
+    def _finish_prefetch(self, gs, msg, ready_msg="下一套题已就绪"):
+        """保存后台题库；若主持人正在等待，则直接装载并自动开局。"""
+        if self.start_after_gen:
+            self.start_after_gen = False
+            self._clear_next()
+            self._apply(gs, msg + "（后台准备完成）", start=True)
+            return True
+        self.next_set, self.next_msg = gs, msg
+        self.next_gen = {"status": "ok", "msg": ready_msg}
+        return False
+
     def begin_play(self):
         """开局 —— 各玩法第一个阶段不一样。"""
         m = modes.get(self.kind)
@@ -202,10 +231,9 @@ class Room(object):
             if self.gen["status"] == "running":
                 return
             # 上一局玩的时候已经悄悄出好下一套了，直接拿来用，不用等
-            if self.next_set is not None and self.next_sig == self.sig():
-                gs, msg = self.next_set, self.next_msg
-                self.next_set, self.next_msg = None, ""
-                self.next_gen = {"status": "idle", "msg": ""}
+            prepared = self._take_next()
+            if prepared:
+                gs, msg = prepared
                 self._apply(gs, msg + "（提前出好的，秒开）", start=start_after)
                 bump()
                 return
@@ -266,15 +294,15 @@ class Room(object):
 
     def _prefetch(self):
         sig = self.next_sig
+        started = False
         try:
             gs, msg = self._build()
             with self.lock:
                 if (sig != self.sig() or     # 中途改了设置/关闭开关，这套作废
                         not self.settings.get("prefetch_next", True)):
-                    self.next_gen = {"status": "idle", "msg": ""}
+                    self._clear_next()
                 else:
-                    self.next_set, self.next_msg = gs, msg
-                    self.next_gen = {"status": "ok", "msg": "下一套题已就绪"}
+                    started = self._finish_prefetch(gs, msg)
         except Exception as e:
             # DeepSeek 出岔子也不能让下一局干等 —— 退而求其次存一套本地的，
             # 保证「再来一局」永远是秒开
@@ -286,19 +314,23 @@ class Room(object):
                 with self.lock:
                     if (sig == self.sig() and
                             self.settings.get("prefetch_next", True)):
-                        self.next_set = gs
-                        self.next_msg = "本地随机生成"
-                        self.next_gen = {
-                            "status": "ok",
-                            "msg": "下一套题已就绪（DeepSeek 预生成失败：%s，"
-                                   "改用了本地题库）" % e}
+                        started = self._finish_prefetch(
+                            gs,
+                            "本地随机生成（DeepSeek 预生成失败：%s）" % e,
+                            "下一套题已就绪（DeepSeek 预生成失败：%s，"
+                            "改用了本地题库）" % e,
+                        )
                     else:
-                        self.next_gen = {"status": "idle", "msg": ""}
+                        self._clear_next()
             except Exception:
                 with self.lock:
+                    self.start_after_gen = False
                     self.next_gen = {"status": "error",
                                      "msg": "预生成失败：%s" % e}
         bump()
+        # B 已经自动开局后，继续在后台准备 C，下一局仍然不用等。
+        if started:
+            self.prefetch_async()
 
     # ---------------- 主持人操作 ----------------
 
@@ -310,6 +342,23 @@ class Room(object):
                 return
             if action == "start":
                 if self.gen["status"] == "running":
+                    return
+                # 从结算页回大厅后直接点「开始游戏」，也必须自动接管后台准备好的
+                # 下一套；不能继续启动上一局的 self.set。
+                prepared = self._take_next()
+                if prepared:
+                    gs, msg = prepared
+                    self._apply(gs, msg + "（提前出好的，秒开）")
+                elif self.banked:
+                    if (self.next_gen.get("status") == "running" and
+                            self.next_sig == self.sig()):
+                        self.start_after_gen = True
+                        self.next_gen["msg"] = "正在完成下一套，完成后自动开始…"
+                        self.touch()
+                        # 旧题已经结算，等后台的新题，绝不再次启动旧题。
+                        return bump()
+                    # 没有可接管的后台题库时，先生成一套全新的再自动开局。
+                    self.generate_async(True)
                     return
                 if not self.set:
                     self.generate_async(True)
@@ -372,10 +421,8 @@ class Room(object):
                 if "prefetch_next" in payload:
                     self.settings["prefetch_next"] = bool(payload["prefetch_next"])
                     if not self.settings["prefetch_next"]:
-                        self.next_set = None
-                        self.next_msg = ""
-                        self.next_sig = None
-                        self.next_gen = {"status": "idle", "msg": ""}
+                        self.start_after_gen = False
+                        self._clear_next()
                 if payload.get("api_key"):
                     self.settings["api_key"] = str(payload["api_key"]).strip()[:512]
                 if payload.get("model"):
@@ -383,6 +430,7 @@ class Room(object):
                 if self.sig() != old_sig:
                     self.generation_rev += 1
                     self.start_after_gen = False
+                    self._clear_next()
                     if self.gen.get("status") == "running":
                         self.gen = {"status": "idle", "msg": ""}
                 self.touch()
@@ -402,8 +450,7 @@ class Room(object):
                     self.game_name = catalog.name_of(gid)
                     self.settings.update(catalog.preset_of(gid))
                     self.set = None
-                    self.next_set = None
-                    self.next_gen = {"status": "idle", "msg": ""}
+                    self._clear_next()
                     self.gen = {"status": "idle", "msg": ""}
                     for p in self.players.values():
                         p.reset_round()
@@ -646,6 +693,9 @@ class Room(object):
                 "gen": self.gen,
                 "next_gen": self.next_gen,
                 "next_ready": self.next_set is not None,
+                "start_pending": bool(
+                    self.start_after_gen and
+                    self.next_gen.get("status") == "running"),
                 "board": board,
                 "total_board": total_board,
                 "played": self.played,

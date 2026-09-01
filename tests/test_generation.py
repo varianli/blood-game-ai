@@ -138,6 +138,94 @@ class AIGuardrailTests(unittest.TestCase):
 
 
 class GenerationRaceTests(unittest.TestCase):
+    def test_start_promotes_ready_next_set_before_entering_briefing(self):
+        room = engine.Room("2468", engine.default_settings())
+        current = {"title": "当前 A", "source": "test",
+                   "infos": ["A 的第一条"], "questions": []}
+        prepared = {"title": "下一套 B", "source": "test",
+                    "infos": ["B 的第一条"], "questions": []}
+        room.set = current
+        room.banked = True
+        room.next_set = prepared
+        room.next_msg = "后台准备完成"
+        room.next_sig = room.sig()
+
+        with mock.patch.object(room, "prefetch_async"):
+            room.act("start")
+
+        self.assertIs(room.set, prepared)
+        self.assertEqual(room.phase, "briefing")
+        self.assertEqual(room.snapshot(is_host=True)["info"]["text"], "B 的第一条")
+        self.assertIsNone(room.next_set)
+
+    def test_start_waits_for_running_prefetch_then_opens_that_set(self):
+        room = engine.Room("2468", engine.default_settings())
+        current = {"title": "已经玩过的 A", "source": "test",
+                   "infos": ["A 的第一条"], "questions": []}
+        prepared = {"title": "刚生成好的 B", "source": "test",
+                    "infos": ["B 的第一条"], "questions": []}
+        room.set = current
+        room.banked = True
+        room.next_sig = room.sig()
+        room.next_gen = {"status": "running", "msg": "正在预生成下一套"}
+
+        with mock.patch.object(room, "generate_async") as generate:
+            room.act("start")
+
+        generate.assert_not_called()
+        self.assertEqual(room.phase, "lobby")
+        self.assertTrue(room.start_after_gen)
+        self.assertTrue(room.snapshot(is_host=True)["start_pending"])
+
+        with mock.patch.object(room, "_build",
+                               return_value=(prepared, "后台准备完成")):
+            with mock.patch.object(room, "prefetch_async"):
+                room._prefetch()
+
+        self.assertIs(room.set, prepared)
+        self.assertEqual(room.phase, "briefing")
+        self.assertEqual(room.snapshot(is_host=True)["info"]["text"], "B 的第一条")
+
+    def test_completed_set_without_prefetch_generates_before_starting(self):
+        room = engine.Room("2468", engine.default_settings())
+        room.set = {"title": "已经玩过的 A", "source": "test",
+                    "infos": ["A 的第一条"], "questions": []}
+        room.banked = True
+
+        with mock.patch.object(room, "generate_async") as generate:
+            room.act("start")
+
+        generate.assert_called_once_with(True)
+        self.assertEqual(room.phase, "lobby")
+
+    def test_generate_button_promotes_ready_next_set_to_current(self):
+        room = engine.Room("2468", engine.default_settings())
+        room.set = {"title": "当前 A", "source": "test",
+                    "infos": ["A"], "questions": []}
+        prepared = {"title": "下一套 B", "source": "test",
+                    "infos": ["B"], "questions": []}
+        room.next_set = prepared
+        room.next_msg = "后台准备完成"
+        room.next_sig = room.sig()
+
+        room.act("generate")
+
+        self.assertIs(room.set, prepared)
+        self.assertIsNone(room.next_set)
+
+    def test_question_setting_change_discards_stale_prefetched_set(self):
+        room = engine.Room("2468", engine.default_settings())
+        room.next_set = {"title": "旧设置的下一套", "source": "test",
+                         "infos": ["旧题"], "questions": []}
+        room.next_sig = room.sig()
+        room.next_gen = {"status": "ok", "msg": "下一套题已就绪"}
+
+        room.act("settings", {"n_infos": 40})
+
+        self.assertIsNone(room.next_set)
+        self.assertIsNone(room.next_sig)
+        self.assertEqual(room.next_gen["status"], "idle")
+
     def test_memory_start_only_prefetches_when_host_enables_it(self):
         game_set = {
             "title": "测试题库", "source": "test",
