@@ -10,6 +10,7 @@
 """
 
 import json
+from pathlib import Path
 import random
 import re
 import urllib.error
@@ -103,11 +104,33 @@ def _loads(text):
 # 全量生成
 # --------------------------------------------------------------------------
 
+STYLE_GUIDE_PATH = str(
+    Path(__file__).resolve().parents[1] / "docs" / "memory30_style_guide.md")
+_GUIDE_START = "<!-- PROMPT_REFERENCE_START -->"
+_GUIDE_END = "<!-- PROMPT_REFERENCE_END -->"
+
+
+def _load_style_reference():
+    """读取仓库里的题型规范，让文档不是摆设而是实际 Prompt 输入。"""
+    try:
+        text = Path(STYLE_GUIDE_PATH).read_text(encoding="utf-8")
+        return text.split(_GUIDE_START, 1)[1].split(_GUIDE_END, 1)[0].strip()
+    except (OSError, IndexError):
+        raise AIError("缺少或无法解析 Memory 30 题型参考文档")
+
+
+STYLE_REFERENCE = _load_style_reference()
+
 PROMPT = """你在为线下聚会制作一套原创 Memory 记忆推理题。节奏参考韩国综艺
 《血之游戏 3》的 Memory 30：大屏先逐条展示看似无关、实际可被后续题目调用的
 信息卡，再考记忆、应用和推理。只借鉴抽象玩法与节奏，不照抄节目原题。
 
 参与的人物：{names}
+
+下面是仓库内 `docs/memory30_style_guide.md` 的生成规范，必须逐条执行：
+<memory30_style_reference>
+{style_reference}
+</memory30_style_reference>
 
 请生成：
 1. 恰好 {n_infos} 条信息卡。每条只讲一个事实，一句话、短、口语化。
@@ -136,11 +159,12 @@ PROMPT = """你在为线下聚会制作一套原创 Memory 记忆推理题。节
 - 4 个选项互不相同且只有 1 个正确，干扰项必须看起来合理。
 - recall/transform 的 explain 写清依据；logic/calculate 写出推理链或简短算式。
 - uses 填这道题实际用到的信息编号（从 1 开始）。
-- 每条信息提供仅供程序检查的 topic、person、template、dependency_group；
+- 每条信息提供仅供程序检查的 topic、family、person、template、dependency_group；
   无人物、无关联组时填空字符串。template 用短标签描述句式骨架，不能用编号规避重复。
 
 只输出 JSON，不要任何解释文字，格式：
-{{"infos": [{{"text":"信息1","topic":"趣味偏好","person":"人物名或空字符串",
+{{"infos": [{{"text":"信息1","topic":"趣味偏好","family":"具体内容家族",
+              "person":"人物名或空字符串",
               "template":"偏好食物","dependency_group":"q07或空字符串"}}, ...],
   "questions": [{{"text": "题干", "options": ["A","B","C","D"],
                  "answer": 0, "explain": "依据或推理链", "uses": [3,4],
@@ -151,6 +175,13 @@ answer 是正确选项在 options 里的下标（0-3）。所有文字用简体�
 TOPICS = ("人物身份", "趣味偏好", "物品视觉", "代码序列",
           "日期事件", "地点关系", "价格数量")
 QUESTION_TYPES = ("recall", "transform", "logic", "calculate")
+
+
+def build_prompt(names, n_infos=30, n_questions=15):
+    return PROMPT.format(
+        names="、".join(names), n_infos=n_infos, n_questions=n_questions,
+        standalone_infos=max(2, n_infos // 3),
+        style_reference=STYLE_REFERENCE)
 
 
 def _normal_topic(raw, text):
@@ -238,17 +269,19 @@ def validate(obj, n_infos, n_questions, names=()):
     qs = obj.get("questions")
     if not isinstance(raw_infos, list) or not isinstance(qs, list):
         raise AIError("缺少 infos 或 questions")
-    infos, topics, owners, templates, dependencies = [], [], [], [], []
+    infos, topics, families, owners, templates, dependencies = [], [], [], [], [], []
     for item in raw_infos:
         if isinstance(item, dict):
             text = str(item.get("text") or "").strip()
             raw_topic = item.get("topic")
+            raw_family = str(item.get("family") or "").strip()
             owner = str(item.get("person") or "").strip()
             template = str(item.get("template") or "").strip()
             dependency = str(item.get("dependency_group") or "").strip()
         else:
             text = str(item).strip()
             raw_topic = ""
+            raw_family = ""
             owner = arrange.owner_of(text, names) or ""
             template = ""
             dependency = ""
@@ -256,6 +289,10 @@ def validate(obj, n_infos, n_questions, names=()):
             continue
         infos.append(text)
         topics.append(_normal_topic(raw_topic, text))
+        detected_family = arrange.content_family(text, names)
+        families.append(
+            raw_family if detected_family.startswith("句式:") and raw_family
+            else detected_family)
         owners.append(owner or arrange.owner_of(text, names) or "")
         templates.append(template or _sentence_skeleton(text, names))
         dependencies.append(dependency)
@@ -263,9 +300,33 @@ def validate(obj, n_infos, n_questions, names=()):
         raise AIError("信息条数太少（%d）" % len(infos))
     infos = infos[:n_infos]
     topics = topics[:n_infos]
+    families = families[:n_infos]
     owners = owners[:n_infos]
     templates = templates[:n_infos]
     dependencies = dependencies[:n_infos]
+
+    family_limits = {
+        "通勤": 1,
+        "出生月份": 1,
+        "幸运数字": 1,
+        "居住地点": 2,
+        "职业身份": 2,
+        "宠物": 2,
+        "饮品习惯": 2,
+        "恐惧偏好": 2,
+        "食物偏好": 2,
+        "休闲偏好": 2,
+        "颜色偏好": 2,
+        "每周频率": 2,
+        "每日时长": 2,
+        "每日数量": 2,
+        "价格收入": 2,
+    }
+    for family, limit in family_limits.items():
+        count = families.count(family)
+        if count > limit:
+            raise AIError("内容家族「%s」重复 %d 次（最多 %d 次）" %
+                          (family, count, limit))
 
     min_topics = 5 if n_infos >= 20 else (4 if n_infos >= 12 else 3)
     if len(set(topics)) < min_topics:
@@ -273,7 +334,7 @@ def validate(obj, n_infos, n_questions, names=()):
     if max(topics.count(topic) for topic in set(topics)) > max(3, int(n_infos * .4)):
         raise AIError("某一种题材占比过高")
     if names and n_infos >= 12:
-        standalone_needed = max(2, n_infos // 6)
+        standalone_needed = max(2, n_infos // 3)
         not_name_first = sum(
             not any(text.startswith(name) for name in names)
             for text in infos)
@@ -326,31 +387,35 @@ def validate(obj, n_infos, n_questions, names=()):
     if sum(q["type"] in ("recall", "transform") for q in good) < n_questions // 2:
         raise AIError("回忆与趣味变换题太少")
 
-    infos, topics = arrange.interleave_topics(
+    infos, topics, families = arrange.interleave_topics(
         infos, good, list(names), topics, random,
-        owners=owners, dependency_groups=dependencies)
+        owners=owners, dependency_groups=dependencies, families=families,
+        return_families=True)
     if any(a == b for a, b in zip(topics, topics[1:])):
         raise AIError("信息题材无法充分穿插")
     if any(len(set(topics[i:i + 4])) < 3 for i in range(len(topics) - 3)):
         raise AIError("连续信息的题材仍过于相似")
+    if any(family in families[max(0, index - 3):index]
+           for index, family in enumerate(families)):
+        raise AIError("连续信息的内容家族仍过于相似")
     good = arrange.interleave_questions(good, random)
-    return infos, good, topics
+    return infos, good, topics, families
 
 
 def generate_ai(names, n_infos=30, n_questions=15,
                 api_key=None, model=DEFAULT_MODEL, timeout=420):
-    prompt = PROMPT.format(
-        names="、".join(names), n_infos=n_infos, n_questions=n_questions,
-        standalone_infos=max(2, n_infos // 6))
+    prompt = build_prompt(names, n_infos, n_questions)
     content = chat(api_key, model,
                    [{"role": "system", "content":
                      "你是综艺记忆游戏的严谨出题人，重视题材节奏、趣味回忆和可验证推理；算术只占少数。"},
                     {"role": "user", "content": prompt}],
                    timeout=timeout, max_tokens=GEN_TOKENS)
-    infos, qs, topics = validate(_loads(content), n_infos, n_questions, names)
+    infos, qs, topics, families = validate(
+        _loads(content), n_infos, n_questions, names)
     return {"title": "DeepSeek 生成 · %d 人局" % len(names),
             "source": "deepseek", "players": list(names),
             "infos": infos, "info_topics": topics,
+            "info_families": families,
             "questions": qs, "cast": []}
 
 

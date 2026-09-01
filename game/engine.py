@@ -172,7 +172,7 @@ class Room(object):
                 gs.get("polish_kept", 0), len(gs["infos"]))
         gs = gen_local.generate(names, s["n_infos"], s["n_questions"],
                                 seed=random.randrange(1 << 30))
-        return gs, "本地随机生成"
+        return gs, "本地综艺风格生成"
 
     def _apply(self, gs, msg, status="ok", start=False):
         """装上新题库并清零本局分数。调用前必须持有锁。"""
@@ -316,7 +316,7 @@ class Room(object):
                             self.settings.get("prefetch_next", True)):
                         started = self._finish_prefetch(
                             gs,
-                            "本地随机生成（DeepSeek 预生成失败：%s）" % e,
+                            "本地综艺风格生成（DeepSeek 预生成失败：%s）" % e,
                             "下一套题已就绪（DeepSeek 预生成失败：%s，"
                             "改用了本地题库）" % e,
                         )

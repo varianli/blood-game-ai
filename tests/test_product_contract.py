@@ -210,6 +210,12 @@ class ProductContractTests(unittest.TestCase):
         self.assertIn("return act('generate');", script)
         self.assertIn(".memory-lobby-panel", css)
 
+    def test_saving_a_new_room_api_key_activates_ai_for_memory(self):
+        script = (ROOT / "web" / "host.js").read_text(encoding="utf-8")
+
+        self.assertIn("memoryPayload.generator === 'local'", script)
+        self.assertIn("memoryPayload.generator = 'ai'", script)
+
     def test_memory_start_exposes_and_saves_next_set_prefetch_option(self):
         script = (ROOT / "web" / "host.js").read_text(encoding="utf-8")
         css = (ROOT / "web" / "app.css").read_text(encoding="utf-8")

@@ -3,6 +3,7 @@
 
 import json
 import os
+from pathlib import Path
 import random
 import tempfile
 import threading
@@ -54,14 +55,86 @@ class LocalGenerationTests(unittest.TestCase):
         self.assertGreaterEqual(types.count("logic"), 3)
         self.assertGreaterEqual(types.count("transform"), 3)
 
+    def test_local_opening_uses_distinct_content_families_and_standalone_cards(self):
+        for seed in range(8):
+            game_set = gen_local.generate(
+                SAMPLE_NAMES, n_infos=30, n_questions=15, seed=seed)
+            families = game_set["info_families"]
+
+            self.assertEqual(len(families), 30)
+            for index, family in enumerate(families):
+                self.assertNotIn(family, families[max(0, index - 3):index])
+            self.assertLessEqual(families.count("通勤"), 1)
+            self.assertLessEqual(families.count("饮品习惯"), 2)
+            standalone = sum(
+                not any(text.startswith(name) for name in SAMPLE_NAMES)
+                for text in game_set["infos"])
+            self.assertGreaterEqual(standalone, 8)
+            opening_standalone = sum(
+                not any(text.startswith(name) for name in SAMPLE_NAMES)
+                for text in game_set["infos"][:12])
+            self.assertGreaterEqual(opening_standalone, 3)
+
 
 class AIGuardrailTests(unittest.TestCase):
+    def test_prompt_is_built_from_the_repository_style_guide(self):
+        guide = Path(gen_ai.STYLE_GUIDE_PATH).read_text(encoding="utf-8")
+        prompt = gen_ai.build_prompt(SAMPLE_NAMES, 30, 15)
+
+        self.assertIn("同一内容家族不得连续出现", guide)
+        self.assertIn("同一内容家族不得连续出现", prompt)
+
     def test_prompt_uses_memory_30_style_mix_and_caps_arithmetic(self):
         self.assertIn("任意连续 4 条", gen_ai.PROMPT)
         self.assertIn("纯算术最多", gen_ai.PROMPT)
         self.assertIn('"topic"', gen_ai.PROMPT)
         self.assertIn('"type"', gen_ai.PROMPT)
         self.assertNotIn("至少一半必须组合 2 条以上", gen_ai.PROMPT)
+
+    def test_validate_rejects_commute_variants_disguised_as_different_topics(self):
+        cards = [
+            ("林岚坐地铁到公司要 30 分钟。", "地点关系", "乘地铁上班"),
+            ("蓝色三角形。", "物品视觉", "蓝色图形"),
+            ("短码是 M7Q4。", "代码序列", "字母短码"),
+            ("周澈骑自行车上班花费 20 分钟。", "价格数量", "骑车计时"),
+            ("本月第二个星期四是开放日。", "日期事件", "开放日期"),
+            ("林岚在银行工作。", "人物身份", "银行职业"),
+            ("周澈养了一只柯基。", "趣味偏好", "宠物偏好"),
+            ("陈星住在浦东。", "地点关系", "居住地点"),
+            ("陈星开车从家去单位耗时 15 分钟。", "日期事件", "驾车耗时"),
+            ("菜单上柚子茶卖 18 元。", "价格数量", "菜单价格"),
+            ("苏禾戴着紫色帽子。", "物品视觉", "帽子颜色"),
+            ("唐悦每周五去攀岩。", "日期事件", "固定活动"),
+        ]
+        infos = [
+            {"text": text, "topic": topic, "person": "",
+             "template": template, "dependency_group": ""}
+            for text, topic, template in cards
+        ]
+        questions = []
+        for index in range(8):
+            qtype = ("logic" if index in (2, 5) else
+                     "calculate" if index == 6 else
+                     "transform" if index in (1, 4) else "recall")
+            questions.append({
+                "text": ("两条信息合计是多少？" if qtype == "calculate"
+                         else "测试题 %d" % index),
+                "options": ["甲", "乙", "丙", "丁"],
+                "answer": index % 4,
+                "explain": ("1+1=2" if qtype == "calculate"
+                            else "依据已展示的信息。"),
+                "uses": [index + 1, index + 2]
+                        if qtype in ("logic", "calculate") else [index + 1],
+                "type": qtype,
+            })
+
+        with self.assertRaisesRegex(gen_ai.AIError, "内容家族.*通勤"):
+            gen_ai.validate(
+                {"infos": infos, "questions": questions},
+                n_infos=12,
+                n_questions=8,
+                names=SAMPLE_NAMES,
+            )
 
     def test_validate_rejects_name_swapped_repeated_templates(self):
         infos = []

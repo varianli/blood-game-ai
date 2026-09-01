@@ -382,7 +382,7 @@
         '" aria-label="删除人物 ' + (index + 1) + '">×</button></div>';
     }).join('');
     var options = [
-      ['local', '本地随机生成 · 秒出且答案可靠'],
+      ['local', '本地综艺风格生成 · 无需 DeepSeek'],
       ['polish', '本地计算 + DeepSeek 润色'],
       ['ai', 'DeepSeek 全量生成 · 题材最丰富'],
       ['default', '内置默认题库']
@@ -613,6 +613,12 @@
       var payload = { model: model };
       var memoryPayload = collectMemoryPayload(s);
       if (memoryPayload === null) return;
+      // 在 Memory 房间里新录入 Key，用户预期就是让 AI 出题；旧逻辑却仍保留
+      // 默认 local，导致看似保存了 DeepSeek，实际继续跑本地模板。
+      if (isMemoryGame(s.game) && key && memoryPayload.generator === 'local') {
+        memoryPayload.generator = 'ai';
+        memoryDraft.generator = 'ai';
+      }
       Object.keys(memoryPayload).forEach(function (name) {
         payload[name] = memoryPayload[name];
       });
