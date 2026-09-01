@@ -98,13 +98,15 @@ python -m pip install -r requirements.txt
 
 ```powershell
 $env:DEEPSEEK_API_KEY = "你的 API Key"
-$env:DEEPSEEK_MODEL = "deepseek-v4-flash"
+$env:DEEPSEEK_MODEL = "deepseek-v4-pro"
 py server.py
 ```
 
 也可以复制 `config.example.json` 为 `config.json` 后填写本地配置。`config.json` 已被 `.gitignore` 排除，不会进入 Git 历史。
 
 还可以在创建房间时，直接在“房间 AI 设置”中输入模型和 API Key；创建后也能在等待大厅里更新并重新出题。这份密钥只保存在当前房间的服务端内存中，不会下发给玩家，也不会写入浏览器存储，房间清除或服务重启后即消失。
+
+默认采用质量优先配置：`deepseek-v4-pro`、思考模式、`max` 推理强度，并开放模型当前允许的 384K 最大输出空间。结构化结果若仍被截断，程序会自动完整重试一次；因此比 Flash 默认模式更慢、消耗更多，但不会因为 32K 思考预算耗尽就立即改用本地题库。需要更快响应时，仍可在房间 AI 设置中手动改回 `deepseek-v4-flash`。
 
 可用环境变量：
 

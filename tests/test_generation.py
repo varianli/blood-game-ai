@@ -101,6 +101,82 @@ class LocalGenerationTests(unittest.TestCase):
 
 
 class AIGuardrailTests(unittest.TestCase):
+    def test_quality_first_chat_uses_pro_max_thinking_and_full_output_budget(self):
+        payload = {
+            "choices": [{
+                "message": {"content": '{"ok": true}'},
+                "finish_reason": "stop",
+            }],
+        }
+
+        class FakeResponse(object):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(payload).encode("utf-8")
+
+        with mock.patch("game.gen_ai.urllib.request.urlopen",
+                        return_value=FakeResponse()) as urlopen:
+            result = gen_ai.chat(
+                "test-key", None,
+                [{"role": "user", "content": "生成一套题"}],
+            )
+
+        request = urlopen.call_args.args[0]
+        body = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(result, '{"ok": true}')
+        self.assertEqual(body["model"], "deepseek-v4-pro")
+        self.assertEqual(body["thinking"], {"type": "enabled"})
+        self.assertEqual(body["reasoning_effort"], "max")
+        self.assertEqual(body["max_tokens"], 384000)
+        self.assertNotIn("temperature", body)
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], 900)
+
+    def test_quality_first_chat_retries_a_truncated_reasoning_response(self):
+        truncated = {
+            "choices": [{
+                "message": {"content": ""},
+                "finish_reason": "length",
+            }],
+            "usage": {
+                "completion_tokens_details": {"reasoning_tokens": 383999},
+            },
+        }
+        completed = {
+            "choices": [{
+                "message": {"content": '{"questions": []}'},
+                "finish_reason": "stop",
+            }],
+        }
+
+        class FakeResponse(object):
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(self.payload).encode("utf-8")
+
+        responses = [FakeResponse(truncated), FakeResponse(completed)]
+        with mock.patch("game.gen_ai.urllib.request.urlopen",
+                        side_effect=responses) as urlopen:
+            result = gen_ai.chat(
+                "test-key", None,
+                [{"role": "user", "content": "生成一套题"}],
+            )
+
+        self.assertEqual(result, '{"questions": []}')
+        self.assertEqual(urlopen.call_count, 2)
+
     def test_prompt_is_built_from_the_repository_style_guide(self):
         guide = Path(gen_ai.STYLE_GUIDE_PATH).read_text(encoding="utf-8")
         prompt = gen_ai.build_prompt(SAMPLE_NAMES, 30, 15)
@@ -500,6 +576,16 @@ class TriviaDifficultyTests(unittest.TestCase):
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_quality_first_model_is_the_default_everywhere(self):
+        host = (Path(__file__).resolve().parents[1] /
+                "web" / "host.html").read_text(encoding="utf-8")
+        example = json.loads((Path(__file__).resolve().parents[1] /
+                              "config.example.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(gen_ai.DEFAULT_MODEL, "deepseek-v4-pro")
+        self.assertEqual(example["deepseek_model"], "deepseek-v4-pro")
+        self.assertIn('value="deepseek-v4-pro"', host)
+
     def test_environment_overrides_local_config(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = os.path.join(directory, "config.json")

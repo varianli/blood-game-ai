@@ -962,7 +962,7 @@
     if (g && S.gen && S.gen.since) {
       var el = Math.round((Date.now() + offset - S.gen.since) / 1000);
       g.textContent = '　已等 ' + el + ' 秒' +
-        (el > 20 ? '（DeepSeek 要先想一会儿，通常 1~2 分钟）' : '');
+        (el > 20 ? '（质量优先深度思考中，可能需要几分钟）' : '');
     }
     var ps = $('preSec');
     if (ps && S.next_gen && S.next_gen.since) {

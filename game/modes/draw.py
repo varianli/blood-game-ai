@@ -28,7 +28,8 @@ def build(room):
         content = gen_ai.chat(
             s.get("api_key"), s.get("model"),
             [{"role": "user", "content": game_content.render_prompt(PROMPT, n=n)}],
-            timeout=300, max_tokens=gen_ai.GEN_TOKENS, temperature=1.2)
+            timeout=gen_ai.QUALITY_TIMEOUT,
+            max_tokens=gen_ai.GEN_TOKENS, temperature=1.2)
         obj = gen_ai._loads(content)
         words = [str(w).strip() for w in (obj.get("words") or []) if str(w).strip()]
         words = [w for w in words if 2 <= len(w) <= 6]

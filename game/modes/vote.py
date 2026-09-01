@@ -27,7 +27,8 @@ def build(room):
             [{"role": "user",
               "content": game_content.render_prompt(
                   PROMPT, n=n, names="、".join(names) or "一群朋友")}],
-            timeout=300, max_tokens=gen_ai.GEN_TOKENS, temperature=1.2)
+            timeout=gen_ai.QUALITY_TIMEOUT,
+            max_tokens=gen_ai.GEN_TOKENS, temperature=1.2)
         obj = gen_ai._loads(content)
         raw = [str(x).strip() for x in (obj.get("prompts") or []) if str(x).strip()]
         raw = [x for x in raw if len(x) <= 40]

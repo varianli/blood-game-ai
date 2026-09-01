@@ -58,7 +58,8 @@ def build(room):
             s.get("api_key"), s.get("model"),
             [{"role": "system", "content": SYSTEM_PROMPT},
              {"role": "user", "content": prompt_for(n, topic, level)}],
-            timeout=420, max_tokens=gen_ai.GEN_TOKENS, temperature=1.1)
+            timeout=gen_ai.QUALITY_TIMEOUT,
+            max_tokens=gen_ai.GEN_TOKENS, temperature=1.1)
         obj = gen_ai._loads(content)
         qs = _clean(obj.get("questions"), n, rng, level)
         if len(qs) < n:

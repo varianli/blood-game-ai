@@ -19,71 +19,85 @@ import urllib.request
 from . import arrange, content as game_content
 
 API_URL = "https://api.deepseek.com/chat/completions"
-DEFAULT_MODEL = "deepseek-v4-flash"
+DEFAULT_MODEL = "deepseek-v4-pro"
 
-# v4 系列是推理模型，思考本身要烧掉一两万 token，
-# max_tokens 给小了会出现 finish_reason=length 而 content 为空。
-GEN_TOKENS = 32000
-# 润色本身很轻（实测有时 10 秒就好了），但推理长度波动极大，
-# 给 16000 时踩到过一次「思考烧光、没输出」，所以这里也给足。
-POLISH_TOKENS = 32000
+# 质量优先：V4 Pro + 明确开启思考 + max 推理档。
+# DeepSeek 当前允许的单次最大输出是 384K；思考 token 与最终正文共用这份
+# 预算，因此直接给到模型上限，避免再次出现“思考写完却没空间输出 JSON”。
+MAX_OUTPUT_TOKENS = 384000
+GEN_TOKENS = MAX_OUTPUT_TOKENS
+POLISH_TOKENS = MAX_OUTPUT_TOKENS
+QUALITY_REASONING_EFFORT = "max"
+QUALITY_TIMEOUT = 900
+TRUNCATION_RETRIES = 1
 
 
 class AIError(Exception):
     pass
 
 
-def chat(api_key, model, messages, timeout=120, json_mode=True,
-         max_tokens=8000, temperature=1.1):
+def chat(api_key, model, messages, timeout=QUALITY_TIMEOUT, json_mode=True,
+         max_tokens=MAX_OUTPUT_TOKENS, temperature=1.1):
     if not api_key:
         raise AIError("没有配置 DeepSeek API Key")
     body = {
         "model": model or DEFAULT_MODEL,
         "messages": messages,
         "max_tokens": max_tokens,
-        "temperature": temperature,
+        "thinking": {"type": "enabled"},
+        "reasoning_effort": QUALITY_REASONING_EFFORT,
     }
+    # DeepSeek 思考模式会忽略 temperature；保留函数参数是为了兼容现有
+    # 各玩法调用，但不再发送一个看似生效、实际无效的配置。
+    _ = temperature
     if json_mode:
         body["response_format"] = {"type": "json_object"}
-    req = urllib.request.Request(
-        API_URL,
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={"Authorization": "Bearer " + api_key,
-                 "Content-Type": "application/json"},
-        method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        detail = ""
+
+    for attempt in range(TRUNCATION_RETRIES + 1):
+        req = urllib.request.Request(
+            API_URL,
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={"Authorization": "Bearer " + api_key,
+                     "Content-Type": "application/json"},
+            method="POST")
         try:
-            detail = e.read().decode("utf-8", "replace")[:300]
-        except Exception:
-            pass
-        if e.code == 402:
-            raise AIError("DeepSeek 账户余额不足（402），请先充值")
-        if e.code in (401, 403):
-            raise AIError("DeepSeek API Key 无效或无权限（%d）" % e.code)
-        raise AIError("DeepSeek 返回 %d：%s" % (e.code, detail))
-    except urllib.error.URLError as e:
-        raise AIError("连不上 DeepSeek：%s" % e.reason)
-    except Exception as e:
-        raise AIError("调用 DeepSeek 失败：%s" % e)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try:
+                detail = e.read().decode("utf-8", "replace")[:300]
+            except Exception:
+                pass
+            if e.code == 402:
+                raise AIError("DeepSeek 账户余额不足（402），请先充值")
+            if e.code in (401, 403):
+                raise AIError("DeepSeek API Key 无效或无权限（%d）" % e.code)
+            raise AIError("DeepSeek 返回 %d：%s" % (e.code, detail))
+        except urllib.error.URLError as e:
+            raise AIError("连不上 DeepSeek：%s" % e.reason)
+        except Exception as e:
+            raise AIError("调用 DeepSeek 失败：%s" % e)
 
-    try:
-        ch = data["choices"][0]
-        content = ch["message"]["content"]
-    except (KeyError, IndexError):
-        raise AIError("DeepSeek 返回格式异常")
+        try:
+            ch = data["choices"][0]
+            content = ch["message"]["content"]
+        except (KeyError, IndexError):
+            raise AIError("DeepSeek 返回格式异常")
 
-    if not (content or "").strip():
+        # 结构化 JSON 只要被截断就不可用；质量优先模式自动完整重做一次，
+        # 不把半截内容交给后续校验，更不会第一次截断就直接退回本地题库。
         if ch.get("finish_reason") == "length":
             used = ((data.get("usage") or {})
                     .get("completion_tokens_details") or {}).get("reasoning_tokens")
-            raise AIError("模型把 %s token 全用在思考上了，没来得及输出结果"
-                          % (used or max_tokens))
-        raise AIError("DeepSeek 返回了空内容")
-    return content
+            if attempt < TRUNCATION_RETRIES:
+                continue
+            raise AIError(
+                "模型连续两次用满 %s token，仍未输出完整结果" %
+                (used or max_tokens))
+        if not (content or "").strip():
+            raise AIError("DeepSeek 返回了空内容")
+        return content
 
 
 def _loads(text):
@@ -355,7 +369,7 @@ def validate(obj, n_infos, n_questions, names=()):
 
 
 def generate_ai(names, n_infos=30, n_questions=15,
-                api_key=None, model=DEFAULT_MODEL, timeout=420):
+                api_key=None, model=DEFAULT_MODEL, timeout=QUALITY_TIMEOUT):
     prompt = build_prompt(names, n_infos, n_questions)
     content = chat(api_key, model,
                    [{"role": "system", "content":
@@ -380,7 +394,8 @@ POLISH_PROMPT = game_content.load_prompt("memory", "polish_prompt.md")
 _NUM = re.compile(r"\d+(?:\.\d+)?")
 
 
-def polish(game_set, names, api_key=None, model=DEFAULT_MODEL, timeout=300):
+def polish(game_set, names, api_key=None, model=DEFAULT_MODEL,
+           timeout=QUALITY_TIMEOUT):
     """返回润色后的 set；任何一条校验不过就保留本地原句。"""
     infos = game_set["infos"]
     lines = "\n".join("%d. %s" % (i + 1, t) for i, t in enumerate(infos))
