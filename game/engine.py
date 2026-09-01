@@ -208,7 +208,6 @@ class Room(object):
                 self.next_gen = {"status": "idle", "msg": ""}
                 self._apply(gs, msg + "（提前出好的，秒开）", start=start_after)
                 bump()
-                self.prefetch_async()
                 return
             self.gen = {"status": "running", "msg": "正在出题…",
                         "since": now_ms()}
@@ -253,8 +252,9 @@ class Room(object):
     def prefetch_async(self):
         """开局后在后台把下一套题先出好，这样「再来一局」不用干等 DeepSeek。"""
         with self.lock:
-            if self.settings.get("generator") not in ("ai", "polish"):
-                return                      # 本地出题本来就是瞬间的
+            if (self.kind != catalog.DEDUCE or
+                    not self.settings.get("prefetch_next", True)):
+                return
             if self.next_gen.get("status") == "running" or self.next_set:
                 return
             self.next_gen = {"status": "running", "msg": "正在预生成下一套…",
@@ -269,7 +269,8 @@ class Room(object):
         try:
             gs, msg = self._build()
             with self.lock:
-                if sig != self.sig():        # 中途改了设置，这套作废
+                if (sig != self.sig() or     # 中途改了设置/关闭开关，这套作废
+                        not self.settings.get("prefetch_next", True)):
                     self.next_gen = {"status": "idle", "msg": ""}
                 else:
                     self.next_set, self.next_msg = gs, msg
@@ -283,7 +284,8 @@ class Room(object):
                                         s["n_infos"], s["n_questions"],
                                         seed=random.randrange(1 << 30))
                 with self.lock:
-                    if sig == self.sig():
+                    if (sig == self.sig() and
+                            self.settings.get("prefetch_next", True)):
                         self.next_set = gs
                         self.next_msg = "本地随机生成"
                         self.next_gen = {
@@ -318,8 +320,9 @@ class Room(object):
                     p.reset_round()
                 self.banked = False
                 self.begin_play()
-                # 这一局开打了，后台把下一套先出好
-                threading.Thread(target=self.prefetch_async, daemon=True).start()
+                # 这一局开打了；主持人勾选后，后台把下一套先出好
+                if self.settings.get("prefetch_next", True):
+                    self.prefetch_async()
             elif action == "skip":
                 # 大厅里「跳过」什么都不做，否则会把刚退出来的游戏又拉起来
                 if self.phase != "lobby":
@@ -366,6 +369,13 @@ class Room(object):
                     self.settings["generator"] = payload["generator"]
                 if "auto" in payload:
                     self.settings["auto"] = bool(payload["auto"])
+                if "prefetch_next" in payload:
+                    self.settings["prefetch_next"] = bool(payload["prefetch_next"])
+                    if not self.settings["prefetch_next"]:
+                        self.next_set = None
+                        self.next_msg = ""
+                        self.next_sig = None
+                        self.next_gen = {"status": "idle", "msg": ""}
                 if payload.get("api_key"):
                     self.settings["api_key"] = str(payload["api_key"]).strip()[:512]
                 if payload.get("model"):
@@ -643,7 +653,7 @@ class Room(object):
                 "settings": {k: s[k] for k in
                              ("info_sec", "question_sec", "reveal_sec",
                               "board_sec", "n_infos", "n_questions",
-                              "generator", "auto", "names", "model",
+                              "generator", "auto", "prefetch_next", "names", "model",
                              "describe_sec", "topic", "level")
                              if k in s},
                 "has_set": bool(self.set),
@@ -699,7 +709,7 @@ class Room(object):
 def default_settings(api_key="", model=gen_ai.DEFAULT_MODEL):
     return {"info_sec": 8, "question_sec": 20, "reveal_sec": 6, "board_sec": 6,
             "n_infos": 30, "n_questions": 15, "generator": "local",
-            "auto": True, "names": list(DEFAULT_NAMES),
+            "auto": True, "prefetch_next": True, "names": list(DEFAULT_NAMES),
             "api_key": api_key, "model": model}
 
 

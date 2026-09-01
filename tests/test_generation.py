@@ -3,6 +3,7 @@
 
 import json
 import os
+import random
 import tempfile
 import threading
 import time
@@ -10,7 +11,7 @@ import unittest
 from unittest import mock
 
 import server
-from game import engine, gen_ai, gen_local
+from game import arrange, engine, gen_ai, gen_local
 from game.modes import trivia
 
 
@@ -38,8 +39,82 @@ class LocalGenerationTests(unittest.TestCase):
             self.assertTrue(question["uses"])
             self.assertTrue(all(1 <= idx <= 30 for idx in question["uses"]))
 
+    def test_local_cards_mix_topics_instead_of_grouping_one_template(self):
+        game_set = gen_local.generate(
+            SAMPLE_NAMES, n_infos=30, n_questions=15, seed=20260901)
+
+        topics = game_set["info_topics"]
+        self.assertGreaterEqual(len(set(topics)), 5)
+        self.assertTrue(all(a != b for a, b in zip(topics, topics[1:])))
+        for window_start in range(len(topics) - 3):
+            self.assertGreaterEqual(
+                len(set(topics[window_start:window_start + 4])), 3)
+        types = [question["type"] for question in game_set["questions"]]
+        self.assertLessEqual(types.count("calculate"), 2)
+        self.assertGreaterEqual(types.count("logic"), 3)
+        self.assertGreaterEqual(types.count("transform"), 3)
+
 
 class AIGuardrailTests(unittest.TestCase):
+    def test_prompt_uses_memory_30_style_mix_and_caps_arithmetic(self):
+        self.assertIn("任意连续 4 条", gen_ai.PROMPT)
+        self.assertIn("纯算术最多", gen_ai.PROMPT)
+        self.assertIn('"topic"', gen_ai.PROMPT)
+        self.assertIn('"type"', gen_ai.PROMPT)
+        self.assertNotIn("至少一半必须组合 2 条以上", gen_ai.PROMPT)
+
+    def test_validate_rejects_name_swapped_repeated_templates(self):
+        infos = []
+        for i in range(12):
+            name = SAMPLE_NAMES[i % len(SAMPLE_NAMES)]
+            verb = "要" if i % 2 else "需要"
+            infos.append("%s去上班%s %d 分钟。" % (name, verb, 10 + i))
+        questions = [{
+            "text": "测试题 %d" % i,
+            "options": ["甲", "乙", "丙", "丁"],
+            "answer": i % 4,
+            "explain": "依据已展示的信息。",
+            "uses": [i + 1],
+        } for i in range(8)]
+
+        with self.assertRaisesRegex(gen_ai.AIError, "句式|题材"):
+            gen_ai.validate(
+                {"infos": infos, "questions": questions},
+                n_infos=12,
+                n_questions=8,
+                names=SAMPLE_NAMES,
+            )
+
+    def test_question_label_cannot_disguise_a_calculation_as_recall(self):
+        qtype = gen_ai._normal_question_type(
+            {"type": "recall", "explain": "30×2＝60"},
+            uses=[1, 2],
+            text="两个人合计花了多长时间？",
+        )
+
+        self.assertEqual(qtype, "calculate")
+
+    def test_topic_interleave_remaps_question_references(self):
+        infos = ["偏好一", "偏好二", "偏好三", "日期一", "日期二", "日期三",
+                 "物品一", "物品二", "物品三", "地点一", "地点二", "地点三"]
+        topics = (["趣味偏好"] * 3 + ["日期事件"] * 3 +
+                  ["物品视觉"] * 3 + ["地点关系"] * 3)
+        questions = [{"uses": [1, 4, 7]}]
+
+        mixed_infos, mixed_topics = arrange.interleave_topics(
+            infos, questions, [], topics, random.Random(9))
+
+        self.assertCountEqual(mixed_infos, infos)
+        self.assertTrue(all(a != b
+                            for a, b in zip(mixed_topics, mixed_topics[1:])))
+        for window_start in range(len(mixed_topics) - 3):
+            self.assertGreaterEqual(
+                len(set(mixed_topics[window_start:window_start + 4])), 3)
+        self.assertEqual(
+            {mixed_infos[index - 1] for index in questions[0]["uses"]},
+            {"偏好一", "日期一", "物品一"},
+        )
+
     def test_polish_rejects_changed_numbers_but_keeps_valid_rewrite(self):
         source = {
             "title": "本地题库",
@@ -63,6 +138,25 @@ class AIGuardrailTests(unittest.TestCase):
 
 
 class GenerationRaceTests(unittest.TestCase):
+    def test_memory_start_only_prefetches_when_host_enables_it(self):
+        game_set = {
+            "title": "测试题库", "source": "test",
+            "infos": ["一条信息"], "questions": [],
+        }
+        disabled = engine.Room("2468", engine.default_settings())
+        disabled.set = game_set
+        disabled.act("settings", {"generator": "ai", "prefetch_next": False})
+        with mock.patch("game.engine.threading.Thread") as thread:
+            disabled.act("start")
+        thread.assert_not_called()
+
+        enabled = engine.Room("1357", engine.default_settings())
+        enabled.set = game_set
+        enabled.act("settings", {"generator": "ai", "prefetch_next": True})
+        with mock.patch("game.engine.threading.Thread") as thread:
+            enabled.act("start")
+        thread.assert_called_once()
+
     def test_finished_generation_cannot_overwrite_a_new_game(self):
         room = engine.Room("2468", engine.default_settings())
         old_started = threading.Event()

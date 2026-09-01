@@ -960,6 +960,91 @@ def identity_questions(rng, people):
                                     [k for k, _ in p["facts"]].index(key)][1],
                                 uses=[p["idx"][key]])
                 out.append(mk3)
+    for key, label, suffix, fallback in (
+            ("month", "是几月出生的", " 月", range(1, 13)),
+            ("lucky", "的幸运数字是多少", "", range(1, 10))):
+        for p in people:
+            if key in p["idx"]:
+                def mk4(p=p, key=key, label=label, suffix=suffix,
+                        fallback=fallback):
+                    correct = "%d%s" % (p[key], suffix)
+                    others = ["%d%s" % (q[key], suffix)
+                              for q in people if q is not p]
+                    opts, ai = build_choice(
+                        rng, correct,
+                        others + ["%d%s" % (value, suffix) for value in fallback])
+                    return dict(
+                        text="%s%s？" % (p["name"], label),
+                        options=opts, answer=ai,
+                        explain="信息里写着：%s" % p["facts"][
+                            [k for k, _ in p["facts"]].index(key)][1],
+                        uses=[p["idx"][key]])
+                out.append(mk4)
+    return out
+
+
+def _fact_detail(p, key):
+    """去掉人名，得到可放进反向匹配题里的短线索。"""
+    for fact_key, text in p["facts"]:
+        if fact_key == key:
+            return text.replace(p["name"], "", 1).strip(" 。")
+    return ""
+
+
+def fun_questions(rng, people):
+    """不靠四则运算的反向匹配和双线索关联题。"""
+    out = []
+    all_details = {}
+    for p in people:
+        for key in p["idx"]:
+            detail = _fact_detail(p, key)
+            if detail:
+                all_details.setdefault(detail, []).append(p["name"])
+
+    for p in people:
+        keys = list(p["idx"])
+        # 双线索尽量跨题材：不是比收入，而是从两个记忆钩子锁定人物。
+        pairs = []
+        for i, first in enumerate(keys):
+            for second in keys[i + 1:]:
+                score = 1 if fact_topic(first) != fact_topic(second) else 0
+                pairs.append((score, rng.random(), first, second))
+        if pairs:
+            _, _, first, second = max(pairs)
+            first_detail = _fact_detail(p, first)
+            second_detail = _fact_detail(p, second)
+            wrong_names = [q["name"] for q in people if q is not p]
+            rng.shuffle(wrong_names)
+            options, answer = build_choice(rng, p["name"], wrong_names)
+            out.append({
+                "text": "同时符合「%s」和「%s」的是谁？"
+                        % (first_detail, second_detail),
+                "options": options,
+                "answer": answer,
+                "explain": "%s的两条信息分别是：%s；%s。"
+                           % (p["name"], first_detail, second_detail),
+                "uses": sorted([p["idx"][first], p["idx"][second]]),
+                "type": "logic",
+            })
+
+        # 把「人物 → 属性」倒过来问，改变回忆方向，避免整场都是同一种题干。
+        candidates = [key for key in keys
+                      if len(all_details.get(_fact_detail(p, key), [])) == 1]
+        if candidates:
+            candidates.sort(key=lambda key: fact_topic(key) == "价格数量")
+            key = candidates[0]
+            detail = _fact_detail(p, key)
+            wrong_names = [q["name"] for q in people if q is not p]
+            rng.shuffle(wrong_names)
+            options, answer = build_choice(rng, p["name"], wrong_names)
+            out.append({
+                "text": "谁的信息里出现了「%s」？" % detail,
+                "options": options,
+                "answer": answer,
+                "explain": "这条信息属于%s。" % p["name"],
+                "uses": [p["idx"][key]],
+                "type": "transform",
+            })
     return out
 
 
@@ -969,6 +1054,45 @@ def identity_questions(rng, people):
 
 ARCHES = ["doctor", "cafe", "coach", "coder", "teacher", "courier",
           "driver", "streamer", "baker", "florist"]
+
+
+def fact_topic(key):
+    """本地题库也带题材标签，供服务端把卡片按综艺节奏重新穿插。"""
+    if key == "job":
+        return "人物身份"
+    if key == "home":
+        return "地点关系"
+    if key in ("pet", "drink", "fear", "food", "park", "season"):
+        return "趣味偏好"
+    if key == "color":
+        return "物品视觉"
+    if key == "month":
+        return "日期事件"
+    if key == "lucky":
+        return "代码序列"
+    return "价格数量"
+
+
+def story_first_facts(facts, person_index):
+    """按题材轮转事实；不同人物从不同题材起步，前 30 张自然形成混合。"""
+    topic_order = ["人物身份", "趣味偏好", "地点关系", "物品视觉",
+                   "日期事件", "代码序列", "价格数量"]
+    shift = person_index % len(topic_order)
+    topic_order = topic_order[shift:] + topic_order[:shift]
+    grouped = {topic: [] for topic in topic_order}
+    for item in facts:
+        grouped.setdefault(fact_topic(item[0]), []).append(item)
+
+    ordered = []
+    while any(grouped.values()):
+        progressed = False
+        for topic in topic_order:
+            if grouped.get(topic):
+                ordered.append(grouped[topic].pop(0))
+                progressed = True
+        if not progressed:
+            break
+    return ordered
 
 
 def generate(names, n_infos=30, n_questions=15, seed=None):
@@ -985,11 +1109,13 @@ def generate(names, n_infos=30, n_questions=15, seed=None):
     people = []
     for i, nm in enumerate(names):
         pool = {"hospital": rng.choice(HOSPITALS), "office": rng.choice(OFFICES)}
-        people.append(make_person(rng, nm, arches[i % len(arches)],
-                                  districts[i % len(districts)], pool))
+        person = make_person(rng, nm, arches[i % len(arches)],
+                             districts[i % len(districts)], pool)
+        person["facts"] = story_first_facts(person["facts"], i)
+        people.append(person)
 
     # 轮流从每个人身上取事实，直到凑够 n_infos 条
-    infos, meta = [], []
+    infos, meta, info_topics = [], [], []
     for p in people:
         p["idx"] = {}
     cursor, guard = 0, 0
@@ -1006,11 +1132,12 @@ def generate(names, n_infos=30, n_questions=15, seed=None):
         infos.append(text)
         p["idx"][key] = len(infos)          # 1-based
         meta.append((p["name"], key))
+        info_topics.append(fact_topic(key))
 
     made = []
     seen_text = set()
 
-    def emit(q):
+    def emit(q, qtype):
         if not q:
             return
         if "_c" in q:
@@ -1019,6 +1146,7 @@ def generate(names, n_infos=30, n_questions=15, seed=None):
         if q["text"] in seen_text:
             return
         seen_text.add(q["text"])
+        q["type"] = qtype
         made.append(q)
 
     person_bs = []
@@ -1030,41 +1158,59 @@ def generate(names, n_infos=30, n_questions=15, seed=None):
 
     cross_bs = cross_questions(rng, people)
     rng.shuffle(cross_bs)
+    fun = fun_questions(rng, people)
+    logic = [q for q in fun if q["type"] == "logic"]
+    transforms = [q for q in fun if q["type"] == "transform"]
+    rng.shuffle(logic)
+    rng.shuffle(transforms)
 
-    # 目标：约 2/3 单人题 + 1/3 组合题，组合题优先保证有一定数量
-    n_cross = min(len(cross_bs), max(3, n_questions // 3))
-    for fn in cross_bs[:n_cross]:
-        emit(fn())
-    for p, needs, fn in person_bs:
+    # 原版节奏：直接回忆占主干，穿插变换与跨线索推理，纯算术只留少量。
+    logic_target = min(len(logic), max(1, n_questions // 5))
+    transform_target = min(len(transforms), max(2, (n_questions + 3) // 4))
+    calculate_target = min(len(person_bs), max(0, n_questions // 8))
+    for q in logic[:logic_target]:
+        emit(q, "logic")
+    for q in transforms[:transform_target]:
+        emit(q, "transform")
+    for p, needs, fn in person_bs[:calculate_target]:
+        emit(fn(p["idx"]), "calculate")
+
+    idq = identity_questions(rng, people)
+    rng.shuffle(idq)
+    for fn in idq:
         if len(made) >= n_questions:
             break
-        emit(fn(p["idx"]))
-    for fn in cross_bs[n_cross:]:
+        emit(fn(), "recall")
+
+    # 人数极少或信息数很小时，按优先级用剩余趣味题和旧题型兜底。
+    for q in logic[logic_target:] + transforms[transform_target:]:
         if len(made) >= n_questions:
             break
-        emit(fn())
-    if len(made) < n_questions:
-        idq = identity_questions(rng, people)
-        rng.shuffle(idq)
-        for fn in idq:
-            if len(made) >= n_questions:
-                break
-            emit(fn())
+        emit(q, q["type"])
+    for fn in cross_bs:
+        if len(made) >= n_questions:
+            break
+        emit(fn(), "logic")
+    for p, needs, fn in person_bs[calculate_target:]:
+        if len(made) >= n_questions:
+            break
+        emit(fn(p["idx"]), "calculate")
 
-    rng.shuffle(made)
     made = made[:n_questions]
-    for i, q in enumerate(made):
-        q["no"] = i + 1
+    made = arrange.interleave_questions(made, rng)
 
     # 轮流取事实本身就不会连着，但顺序太规律（P1 P2 P3 P1 P2 P3…）容易被摸清，
     # 这里再随机穿插一次
-    infos = arrange.interleave(infos[:n_infos], made, names, rng)
+    infos, info_topics = arrange.interleave_topics(
+        infos[:n_infos], made, names, info_topics[:n_infos], rng,
+        owners=[owner for owner, _ in meta[:n_infos]])
 
     return {
         "title": "随机生成 · %d 人局" % len(names),
         "source": "local",
         "players": names,
         "infos": infos,
+        "info_topics": info_topics,
         "questions": made,
         "cast": [{"name": p["name"], "role": p["role"], "district": p["district"]}
                  for p in people],

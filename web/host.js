@@ -6,7 +6,7 @@
   var roomAiDraft = { key: '', model: '', open: false };
   var memoryDraft = {
     game: '', initialized: false, open: false,
-    names: [], generator: '', nInfos: '', nQuestions: ''
+    names: [], generator: '', nInfos: '', nQuestions: '', prefetchNext: true
   };
 
   function esc(s) {
@@ -367,6 +367,7 @@
     memoryDraft.generator = s.settings.generator || 'local';
     memoryDraft.nInfos = String(s.settings.n_infos || 30);
     memoryDraft.nQuestions = String(s.settings.n_questions || 15);
+    memoryDraft.prefetchNext = s.settings.prefetch_next !== false;
   }
 
   function memorySettingsPanel(s) {
@@ -382,7 +383,7 @@
     var options = [
       ['local', '本地随机生成 · 秒出且答案可靠'],
       ['polish', '本地计算 + DeepSeek 润色'],
-      ['ai', 'DeepSeek 全量生成'],
+      ['ai', 'DeepSeek 全量生成 · 题材最丰富'],
       ['default', '内置默认题库']
     ].map(function (option) {
       return '<option value="' + option[0] + '"' +
@@ -407,7 +408,7 @@
       '<label class="frow"><span class="label">题目数量</span>' +
       '<input class="field" id="memoryQuestionCount" type="number" min="3" max="40" value="' +
       esc(memoryDraft.nQuestions) + '"></label></div>' +
-      '<div class="note">选择 DeepSeek 时会使用本房间下方的 AI 设置；人物与模式只影响本局。</div>' +
+      '<div class="note">选择 DeepSeek 时会使用本房间下方的 AI 设置；新 Prompt 会限制重复句式与纯计算题。</div>' +
       '<button class="btn" id="saveMemorySettings">保存设置并生成题库</button></div>' +
       '</div></div></details>';
   }
@@ -422,6 +423,7 @@
     if ($('memoryGenerator')) memoryDraft.generator = $('memoryGenerator').value;
     if ($('memoryInfoCount')) memoryDraft.nInfos = $('memoryInfoCount').value;
     if ($('memoryQuestionCount')) memoryDraft.nQuestions = $('memoryQuestionCount').value;
+    if ($('prefetchNext')) memoryDraft.prefetchNext = $('prefetchNext').checked;
   }
 
   function collectMemoryPayload(s) {
@@ -444,7 +446,8 @@
       names: names,
       generator: memoryDraft.generator,
       n_infos: nInfos,
-      n_questions: nQuestions
+      n_questions: nQuestions,
+      prefetch_next: memoryDraft.prefetchNext
     };
   }
 
@@ -538,7 +541,14 @@
       memorySettingsPanel(s) +
       roomAiPanel(s) +
       nextTag(s) +
-      '<div style="display:flex;gap:14px;flex-wrap:wrap;justify-content:center">' +
+      (isMemoryGame(s.game) ?
+        '<label class="prefetch-toggle" for="prefetchNext">' +
+        '<input id="prefetchNext" type="checkbox"' +
+        (memoryDraft.prefetchNext ? ' checked' : '') + '>' +
+        '<span><b>开局后后台生成下一套</b>' +
+        '<small>推荐开启；本局进行时提前准备，再来一局可秒开。使用 DeepSeek 时会多一次 API 调用。</small>' +
+        '</span></label>' : '') +
+      '<div class="lobby-start-actions">' +
       '<button class="btn ghost" id="bGen"' + (busy ? ' disabled' : '') + '>换一套题</button>' +
       '<button class="btn" id="bStart"' + ((busy || memoryNeedsSet) ? ' disabled' : '') +
       ' style="padding:18px 44px;font-size:24px">' +
@@ -568,6 +578,11 @@
       }).catch(function () { });
     }
     bindMemorySettings(c, s);
+    if ($('prefetchNext')) {
+      $('prefetchNext').onchange = function () {
+        memoryDraft.prefetchNext = $('prefetchNext').checked;
+      };
+    }
     var aiPanel = $('roomAiPanel');
     var aiModel = $('roomAiModel');
     var aiKey = $('roomApiKey');
@@ -617,7 +632,12 @@
     };
     $('bStart').onclick = function () {
       roomAiDraft.key = '';
-      act('start');
+      var saveStartOption = isMemoryGame(s.game)
+        ? act('settings', { prefetch_next: $('prefetchNext').checked })
+        : Promise.resolve();
+      saveStartOption.then(function () {
+        return act('start');
+      });
     };
     fetch('/api/qr?t=' + encodeURIComponent(joinUrl))
       .then(function (r) { return r.ok ? r.text() : ''; })
@@ -636,7 +656,7 @@
       '<div class="txt">' + esc(i.text) + '</div></div>' +
       '<div class="progress"><i style="width:' +
       (i.i / Math.max(1, i.total) * 100) + '%"></i></div>' +
-      '<div class="note">记住它们 —— 等下的题目要把好几条信息拼起来才能算出答案</div>' +
+      '<div class="note">记住它们 —— 等下可能考细节、找配对，也可能把几条线索串起来</div>' +
       '<button class="btn ghost" id="bSkipB">信息看够了，直接开始答题</button>';
     var armed = 0;
     $('bSkipB').onclick = function () {

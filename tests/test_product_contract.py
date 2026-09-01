@@ -210,6 +210,19 @@ class ProductContractTests(unittest.TestCase):
         self.assertIn("return act('generate');", script)
         self.assertIn(".memory-lobby-panel", css)
 
+    def test_memory_start_exposes_and_saves_next_set_prefetch_option(self):
+        script = (ROOT / "web" / "host.js").read_text(encoding="utf-8")
+        css = (ROOT / "web" / "app.css").read_text(encoding="utf-8")
+
+        lobby = script.split("function renderLobby", 1)[1].split(
+            "function renderBriefing", 1
+        )[0]
+        self.assertIn('id="prefetchNext"', lobby)
+        self.assertIn("开局后后台生成下一套", lobby)
+        self.assertIn("prefetch_next", lobby)
+        self.assertIn("return act('start');", lobby)
+        self.assertIn(".prefetch-toggle", css)
+
     def test_room_bounds_memory_names_and_rejects_unknown_generator(self):
         room = engine.Room("1357", engine.default_settings())
         original_generator = room.settings["generator"]

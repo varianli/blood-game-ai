@@ -103,39 +103,112 @@ def _loads(text):
 # 全量生成
 # --------------------------------------------------------------------------
 
-PROMPT = """你在为一个线下聚会的记忆推理游戏出题，玩法参考韩国综艺：
-先用大屏一条一条闪出关于几个人物的「信息」，全部放完后再考观众，
-题目必须把 2~4 条信息串起来才能算出答案。
+PROMPT = """你在为线下聚会制作一套原创 Memory 记忆推理题。节奏参考韩国综艺
+《血之游戏 3》的 Memory 30：大屏先逐条展示看似无关、实际可被后续题目调用的
+信息卡，再考记忆、应用和推理。只借鉴抽象玩法与节奏，不照抄节目原题。
 
 参与的人物：{names}
 
 请生成：
-1. 恰好 {n_infos} 条信息。每条只讲一个事实，一句话，短，口语化，带具体数字。
-   每个人物的信息数量要大致均匀。
-2. 恰好 {n_questions} 道四选一的题。其中至少一半必须组合 2 条以上的信息
-   （例如「单程 30 分钟 + 每周 5 天 → 一周往返花多久」）。
+1. 恰好 {n_infos} 条信息卡。每条只讲一个事实，一句话、短、口语化。
+2. 恰好 {n_questions} 道四选一题。答案必须能从信息卡唯一确定。
 
-必须保证的多样性（很重要，否则整场会很无聊）：
-- 职业不要全是「靠单价×数量赚钱」那一类。至少 3 个人的信息要围绕
-  时间和距离，比如住在哪个区、单程通勤多少分钟、每节课多少分钟、
-  每天走多少步、每天睡几小时。
-- 题目不要清一色算钱。要有算时间的、算距离的、算次数的。
-- 至少 4 道题必须是**跨人物**的：比较谁花的时间更长 / 谁挣得更多 / 差多少，
-  或者把「人」和「住的地方」配对。
-- 同一个人物最多只能出 2 道题，不要连着出同一个人的题。
+信息题材必须像被打乱的线索盒，而不是按人物写简历：
+- topic 只能取：人物身份、趣味偏好、物品视觉、代码序列、日期事件、地点关系、价格数量。
+- 各类都尽量出现；任意连续 4 条至少覆盖 3 种 topic，相邻两条不能同 topic。
+- 同一人物不能相邻，最好至少隔 3 条；同一道题依赖的多条线索至少隔 4 条，
+  推荐隔 6～12 条。
+- 同一种句式骨架整套最多 2 次，不得只换人名和数字。例如连续写
+  「甲上班要 30 分钟、乙上班要 20 分钟」属于不合格。
+- 至少 {standalone_infos} 条不以人物姓名开头，可写颜色＋图形、短密码、牌面、
+  门牌、座位、菜单、路线或星期锚点。数字可以是日期、编号和位置，不等于要计算。
+- 趣味点可以用反差爱好、奇怪随身物、食物偏好、颜色图形配对、人物物品匹配、
+  路线记忆、关系链、真假拼接和集合缺项；保持轻松，不写隐私羞辱或低俗内容。
 
-严格的计算要求（非常重要）：
-- 每道题的正确答案必须能由你给出的信息严格算出来，你要在心里逐步算一遍再写。
-- 4 个选项互不相同，只有 1 个正确；错误选项要像「常见的算错结果」
-  （比如忘了乘 2、按 7 天算、少乘一步）。
-- explain 里写出完整算式。
-- uses 填写这道题用到的信息编号（从 1 开始，对应上面信息数组的顺序）。
+题型配比（按每 15 题等比例换算）：
+- 5～6 道 recall：直接回忆、人物—属性匹配；
+- 3～4 道 transform：第几个字符、出现次数、哪项未出现、集合缺项；
+- 约 3 道 logic：组合 2～3 条相隔较远的日期、关系、地点或事件线索；
+- 纯算术最多 2 道 calculate，且算钱最多 1 道。不要把多线索题都写成乘法题。
+- 同一个人物最多成为 2 道题的主角；不同 type 的题目穿插出现。
+
+严格要求：
+- 4 个选项互不相同且只有 1 个正确，干扰项必须看起来合理。
+- recall/transform 的 explain 写清依据；logic/calculate 写出推理链或简短算式。
+- uses 填这道题实际用到的信息编号（从 1 开始）。
+- 每条信息提供仅供程序检查的 topic、person、template、dependency_group；
+  无人物、无关联组时填空字符串。template 用短标签描述句式骨架，不能用编号规避重复。
 
 只输出 JSON，不要任何解释文字，格式：
-{{"infos": ["信息1", "信息2", ...],
+{{"infos": [{{"text":"信息1","topic":"趣味偏好","person":"人物名或空字符串",
+              "template":"偏好食物","dependency_group":"q07或空字符串"}}, ...],
   "questions": [{{"text": "题干", "options": ["A","B","C","D"],
-                 "answer": 0, "explain": "算式", "uses": [3,4]}}]}}
+                 "answer": 0, "explain": "依据或推理链", "uses": [3,4],
+                 "type":"recall|transform|logic|calculate"}}]}}
 answer 是正确选项在 options 里的下标（0-3）。所有文字用简体中文。"""
+
+
+TOPICS = ("人物身份", "趣味偏好", "物品视觉", "代码序列",
+          "日期事件", "地点关系", "价格数量")
+QUESTION_TYPES = ("recall", "transform", "logic", "calculate")
+
+
+def _normal_topic(raw, text):
+    value = str(raw or "").strip()
+    aliases = {
+        "身份职业": "人物身份", "职业": "人物身份",
+        "人物日常": "趣味偏好", "偏好": "趣味偏好", "日常趣事": "趣味偏好",
+        "物品": "物品视觉", "颜色图形": "物品视觉", "视觉": "物品视觉",
+        "编号": "代码序列", "字符": "代码序列", "密码编号": "代码序列",
+        "日期时间": "日期事件", "时间事件": "日期事件",
+        "地点路线": "地点关系", "人物关系": "地点关系", "关系路线": "地点关系",
+        "数量": "价格数量", "价格菜单": "价格数量", "数字数量": "价格数量",
+    }
+    value = aliases.get(value, value)
+    if value in TOPICS:
+        return value
+    rules = (
+        ("人物身份", r"职业|从事|担任|当医生|当老师|程序员|老板|教练|主播"),
+        ("物品视觉", r"颜色|图形|形状|扑克牌|卡牌|帽子|衣服|外套|耳机|物品"),
+        ("代码序列", r"密码|编号|账号|数字串|车牌|门牌|座位|楼层|第.位"),
+        ("日期事件", r"生日|星期|周[一二三四五六日天]|日期|\d+月|\d+日|几点|点钟"),
+        ("地点关系", r"住在|地点|路线|路口|公司|医院|学校|同学|姐妹|兄弟|朋友|同事"),
+        ("价格数量", r"元|价格|折扣|公里|分钟|小时|卡路里|\d+杯|\d+件|\d+次"),
+    )
+    for topic, pattern in rules:
+        if re.search(pattern, text):
+            return topic
+    return "趣味偏好"
+
+
+def _sentence_skeleton(text, names):
+    skeleton = text
+    for name in sorted(names, key=len, reverse=True):
+        skeleton = skeleton.replace(name, "{人}")
+    skeleton = re.sub(r"\d+(?:\.\d+)?", "{数}", skeleton)
+    skeleton = re.sub(r"需要|花费|花了|耗时|要", "需", skeleton)
+    skeleton = re.sub(r"[\s，。！？、；：,.!?;:]", "", skeleton)
+    return skeleton
+
+
+def _normal_question_type(q, uses, text):
+    value = str(q.get("type") or "").strip().lower()
+    aliases = {"memory": "recall", "direct": "recall", "推理": "logic",
+               "计算": "calculate", "变换": "transform"}
+    value = aliases.get(value, value)
+    explain = str(q.get("explain") or "")
+    if (re.search(r"总共|合计|相差|多多少|少多少|加起来|乘以|除以", text) or
+            (len(uses) >= 2 and re.search(r"[×÷+*＝=]", explain))):
+        return "calculate"
+    if value == "logic" and len(uses) < 2:
+        value = ""
+    if value in QUESTION_TYPES:
+        return value
+    if re.search(r"未提到|没出现|第.个|第.位|出现几次|缺少", text):
+        return "transform"
+    if len(uses) >= 2:
+        return "logic"
+    return "recall"
 
 
 def _norm_answer(q):
@@ -158,17 +231,59 @@ def _norm_answer(q):
 
 
 def validate(obj, n_infos, n_questions, names=()):
-    """结构校验；数值对不对无法机器验证，由 explain 供主持人肉眼把关。"""
+    """校验结构与 Memory 节奏；无法机器证明的语义正确性由 explain 供复核。"""
     if not isinstance(obj, dict):
         raise AIError("返回的不是对象")
-    infos = obj.get("infos")
+    raw_infos = obj.get("infos")
     qs = obj.get("questions")
-    if not isinstance(infos, list) or not isinstance(qs, list):
+    if not isinstance(raw_infos, list) or not isinstance(qs, list):
         raise AIError("缺少 infos 或 questions")
-    infos = [str(x).strip() for x in infos if str(x).strip()]
-    if len(infos) < max(6, n_infos // 2):
+    infos, topics, owners, templates, dependencies = [], [], [], [], []
+    for item in raw_infos:
+        if isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+            raw_topic = item.get("topic")
+            owner = str(item.get("person") or "").strip()
+            template = str(item.get("template") or "").strip()
+            dependency = str(item.get("dependency_group") or "").strip()
+        else:
+            text = str(item).strip()
+            raw_topic = ""
+            owner = arrange.owner_of(text, names) or ""
+            template = ""
+            dependency = ""
+        if not text:
+            continue
+        infos.append(text)
+        topics.append(_normal_topic(raw_topic, text))
+        owners.append(owner or arrange.owner_of(text, names) or "")
+        templates.append(template or _sentence_skeleton(text, names))
+        dependencies.append(dependency)
+    if len(infos) < n_infos:
         raise AIError("信息条数太少（%d）" % len(infos))
     infos = infos[:n_infos]
+    topics = topics[:n_infos]
+    owners = owners[:n_infos]
+    templates = templates[:n_infos]
+    dependencies = dependencies[:n_infos]
+
+    min_topics = 5 if n_infos >= 20 else (4 if n_infos >= 12 else 3)
+    if len(set(topics)) < min_topics:
+        raise AIError("信息题材太单一（只有 %d 类）" % len(set(topics)))
+    if max(topics.count(topic) for topic in set(topics)) > max(3, int(n_infos * .4)):
+        raise AIError("某一种题材占比过高")
+    if names and n_infos >= 12:
+        standalone_needed = max(2, n_infos // 6)
+        not_name_first = sum(
+            not any(text.startswith(name) for name in names)
+            for text in infos)
+        if not_name_first < standalone_needed:
+            raise AIError("不以人物姓名开头的独立信息太少")
+    skeletons = [_sentence_skeleton(text, names) for text in infos]
+    for label in set(templates + skeletons):
+        count = max(templates.count(label), skeletons.count(label))
+        if label and count > 2:
+            raise AIError("同一种句式重复 %d 次：%s" % (count, label[:24]))
 
     good = []
     for q in qs:
@@ -186,6 +301,9 @@ def validate(obj, n_infos, n_questions, names=()):
             continue
         uses = [u for u in (q.get("uses") or [])
                 if isinstance(u, int) and 1 <= u <= len(infos)]
+        if not uses:
+            continue
+        qtype = _normal_question_type(q, uses, text)
         # 模型很爱把正确答案放在 A（实测 15 题里 8 题是 A），
         # 这里统一重排一次，保证 ABCD 的分布是均匀的。
         order = [0, 1, 2, 3]
@@ -194,31 +312,46 @@ def validate(obj, n_infos, n_questions, names=()):
                      "options": [opts[i] for i in order],
                      "answer": order.index(ans),
                      "explain": str(q.get("explain", "")).strip(),
-                     "uses": sorted(set(uses))})
+                     "uses": sorted(set(uses)),
+                     "type": qtype})
         if len(good) >= n_questions:
             break
-    if len(good) < max(3, n_questions // 2):
+    if len(good) < n_questions:
         raise AIError("可用题目太少（%d 道）" % len(good))
-    for i, q in enumerate(good):
-        q["no"] = i + 1
-    # 模型爱把同一个人的事实写成连续一坨，打散一下（uses 会跟着重映射）
-    if names:
-        infos = arrange.interleave(infos, good, list(names), random)
-    return infos, good
+    max_calculate = max(1, n_questions // 6)
+    if sum(q["type"] == "calculate" for q in good) > max_calculate:
+        raise AIError("纯算术题太多")
+    if sum(q["type"] == "logic" for q in good) < max(1, n_questions // 5):
+        raise AIError("跨线索推理题太少")
+    if sum(q["type"] in ("recall", "transform") for q in good) < n_questions // 2:
+        raise AIError("回忆与趣味变换题太少")
+
+    infos, topics = arrange.interleave_topics(
+        infos, good, list(names), topics, random,
+        owners=owners, dependency_groups=dependencies)
+    if any(a == b for a, b in zip(topics, topics[1:])):
+        raise AIError("信息题材无法充分穿插")
+    if any(len(set(topics[i:i + 4])) < 3 for i in range(len(topics) - 3)):
+        raise AIError("连续信息的题材仍过于相似")
+    good = arrange.interleave_questions(good, random)
+    return infos, good, topics
 
 
 def generate_ai(names, n_infos=30, n_questions=15,
                 api_key=None, model=DEFAULT_MODEL, timeout=420):
-    prompt = PROMPT.format(names="、".join(names), n_infos=n_infos,
-                           n_questions=n_questions)
+    prompt = PROMPT.format(
+        names="、".join(names), n_infos=n_infos, n_questions=n_questions,
+        standalone_infos=max(2, n_infos // 6))
     content = chat(api_key, model,
-                   [{"role": "system", "content": "你是一个严谨的出题人，算术必须准确。"},
+                   [{"role": "system", "content":
+                     "你是综艺记忆游戏的严谨出题人，重视题材节奏、趣味回忆和可验证推理；算术只占少数。"},
                     {"role": "user", "content": prompt}],
                    timeout=timeout, max_tokens=GEN_TOKENS)
-    infos, qs = validate(_loads(content), n_infos, n_questions, names)
+    infos, qs, topics = validate(_loads(content), n_infos, n_questions, names)
     return {"title": "DeepSeek 生成 · %d 人局" % len(names),
             "source": "deepseek", "players": list(names),
-            "infos": infos, "questions": qs, "cast": []}
+            "infos": infos, "info_topics": topics,
+            "questions": qs, "cast": []}
 
 
 # --------------------------------------------------------------------------

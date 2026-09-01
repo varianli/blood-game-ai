@@ -865,6 +865,35 @@ code { background: #24101a; padding: 2px 7px; border-radius: 5px;
     linear-gradient(135deg, rgba(224, 30, 55, .07), rgba(20, 8, 13, .9));
 }
 .memory-lobby-panel summary::before { color: var(--gold); }
+.prefetch-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: min(680px, 100%);
+  box-sizing: border-box;
+  padding: 13px 16px;
+  border: 1px solid rgba(239, 181, 74, .34);
+  border-radius: 14px;
+  color: var(--ink);
+  background: linear-gradient(135deg, rgba(239, 181, 74, .09), rgba(224, 30, 55, .045));
+  cursor: pointer;
+}
+.prefetch-toggle input {
+  width: 19px;
+  height: 19px;
+  margin: 2px 0 0;
+  accent-color: var(--blood);
+  flex: 0 0 auto;
+}
+.prefetch-toggle span { display: grid; gap: 4px; }
+.prefetch-toggle b { font-size: 14px; }
+.prefetch-toggle small { color: var(--muted); font-size: 12px; line-height: 1.55; }
+.lobby-start-actions {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
 .memory-lobby-grid {
   display: grid;
   grid-template-columns: minmax(280px, 1.2fr) minmax(260px, .8fr);
