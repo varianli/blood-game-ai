@@ -16,7 +16,7 @@ import re
 import urllib.error
 import urllib.request
 
-from . import arrange
+from . import arrange, content as game_content
 
 API_URL = "https://api.deepseek.com/chat/completions"
 DEFAULT_MODEL = "deepseek-v4-flash"
@@ -105,7 +105,7 @@ def _loads(text):
 # --------------------------------------------------------------------------
 
 STYLE_GUIDE_PATH = str(
-    Path(__file__).resolve().parents[1] / "docs" / "memory30_style_guide.md")
+    game_content.content_path("memory", "style_guide.md"))
 _GUIDE_START = "<!-- PROMPT_REFERENCE_START -->"
 _GUIDE_END = "<!-- PROMPT_REFERENCE_END -->"
 
@@ -120,56 +120,7 @@ def _load_style_reference():
 
 
 STYLE_REFERENCE = _load_style_reference()
-
-PROMPT = """你在为线下聚会制作一套原创 Memory 记忆推理题。节奏参考韩国综艺
-《血之游戏 3》的 Memory 30：大屏先逐条展示看似无关、实际可被后续题目调用的
-信息卡，再考记忆、应用和推理。只借鉴抽象玩法与节奏，不照抄节目原题。
-
-参与的人物：{names}
-
-下面是仓库内 `docs/memory30_style_guide.md` 的生成规范，必须逐条执行：
-<memory30_style_reference>
-{style_reference}
-</memory30_style_reference>
-
-请生成：
-1. 恰好 {n_infos} 条信息卡。每条只讲一个事实，一句话、短、口语化。
-2. 恰好 {n_questions} 道四选一题。答案必须能从信息卡唯一确定。
-
-信息题材必须像被打乱的线索盒，而不是按人物写简历：
-- topic 只能取：人物身份、趣味偏好、物品视觉、代码序列、日期事件、地点关系、价格数量。
-- 各类都尽量出现；任意连续 4 条至少覆盖 3 种 topic，相邻两条不能同 topic。
-- 同一人物不能相邻，最好至少隔 3 条；同一道题依赖的多条线索至少隔 4 条，
-  推荐隔 6～12 条。
-- 同一种句式骨架整套最多 2 次，不得只换人名和数字。例如连续写
-  「甲上班要 30 分钟、乙上班要 20 分钟」属于不合格。
-- 至少 {standalone_infos} 条不以人物姓名开头，可写颜色＋图形、短密码、牌面、
-  门牌、座位、菜单、路线或星期锚点。数字可以是日期、编号和位置，不等于要计算。
-- 趣味点可以用反差爱好、奇怪随身物、食物偏好、颜色图形配对、人物物品匹配、
-  路线记忆、关系链、真假拼接和集合缺项；保持轻松，不写隐私羞辱或低俗内容。
-
-题型配比（按每 15 题等比例换算）：
-- 5～6 道 recall：直接回忆、人物—属性匹配；
-- 3～4 道 transform：第几个字符、出现次数、哪项未出现、集合缺项；
-- 约 3 道 logic：组合 2～3 条相隔较远的日期、关系、地点或事件线索；
-- 纯算术最多 2 道 calculate，且算钱最多 1 道。不要把多线索题都写成乘法题。
-- 同一个人物最多成为 2 道题的主角；不同 type 的题目穿插出现。
-
-严格要求：
-- 4 个选项互不相同且只有 1 个正确，干扰项必须看起来合理。
-- recall/transform 的 explain 写清依据；logic/calculate 写出推理链或简短算式。
-- uses 填这道题实际用到的信息编号（从 1 开始）。
-- 每条信息提供仅供程序检查的 topic、family、person、template、dependency_group；
-  无人物、无关联组时填空字符串。template 用短标签描述句式骨架，不能用编号规避重复。
-
-只输出 JSON，不要任何解释文字，格式：
-{{"infos": [{{"text":"信息1","topic":"趣味偏好","family":"具体内容家族",
-              "person":"人物名或空字符串",
-              "template":"偏好食物","dependency_group":"q07或空字符串"}}, ...],
-  "questions": [{{"text": "题干", "options": ["A","B","C","D"],
-                 "answer": 0, "explain": "依据或推理链", "uses": [3,4],
-                 "type":"recall|transform|logic|calculate"}}]}}
-answer 是正确选项在 options 里的下标（0-3）。所有文字用简体中文。"""
+PROMPT = game_content.load_prompt("memory")
 
 
 TOPICS = ("人物身份", "趣味偏好", "物品视觉", "代码序列",
@@ -178,7 +129,8 @@ QUESTION_TYPES = ("recall", "transform", "logic", "calculate")
 
 
 def build_prompt(names, n_infos=30, n_questions=15):
-    return PROMPT.format(
+    return game_content.render_prompt(
+        PROMPT,
         names="、".join(names), n_infos=n_infos, n_questions=n_questions,
         standalone_infos=max(2, n_infos // 3),
         style_reference=STYLE_REFERENCE)
@@ -423,17 +375,7 @@ def generate_ai(names, n_infos=30, n_questions=15,
 # 润色：数字由本地引擎保证，模型只改文风
 # --------------------------------------------------------------------------
 
-POLISH_PROMPT = """下面是一个聚会游戏的信息卡，每行一条。
-请把每一句改写得更有画面感、更像在讲这群人的八卦，但是：
-- 所有数字必须一字不差地保留（包括单位）；
-- 所有人名必须保留，不能换人；
-- 每条仍然只讲这一个事实，一句话，不超过 30 个字；
-- 条数和顺序完全不变。
-
-原文：
-{lines}
-
-只输出 JSON：{{"infos": ["改写后第1条", "改写后第2条", ...]}}"""
+POLISH_PROMPT = game_content.load_prompt("memory", "polish_prompt.md")
 
 _NUM = re.compile(r"\d+(?:\.\d+)?")
 
@@ -444,7 +386,8 @@ def polish(game_set, names, api_key=None, model=DEFAULT_MODEL, timeout=300):
     lines = "\n".join("%d. %s" % (i + 1, t) for i, t in enumerate(infos))
     content = chat(api_key, model,
                    [{"role": "user",
-                     "content": POLISH_PROMPT.format(lines=lines)}],
+                     "content": game_content.render_prompt(
+                         POLISH_PROMPT, lines=lines)}],
                    timeout=timeout, max_tokens=POLISH_TOKENS, temperature=1.3)
     obj = _loads(content)
     new = obj.get("infos")

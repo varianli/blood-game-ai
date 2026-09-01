@@ -25,6 +25,69 @@ class _IdCollector(HTMLParser):
 
 
 class ProductContractTests(unittest.TestCase):
+    def test_each_game_has_a_readable_content_folder(self):
+        expected = {
+            "memory": ("Memory", "style_guide.md", "default_set.json"),
+            "trivia": ("知识抢答", "prompt.md", "bank.json"),
+            "mostlikely": ("谁最可能", "prompt.md", "bank.json"),
+            "undercover": ("卧底找茬", "prompt.md", "bank.json"),
+            "draw": ("你画我猜", "prompt.md", "bank.json"),
+        }
+
+        self.assertTrue((ROOT / "games" / "README.md").is_file())
+        for folder, (name, prompt_or_guide, bank) in expected.items():
+            with self.subTest(game=folder):
+                base = ROOT / "games" / folder
+                readme = (base / "README.md").read_text(encoding="utf-8")
+                self.assertIn(name, readme)
+                self.assertTrue((base / prompt_or_guide).is_file())
+                self.assertTrue((base / bank).is_file())
+
+    def test_game_prompts_and_banks_are_runtime_content_not_duplicate_docs(self):
+        from game import content, gen_ai
+        from game.modes import draw, trivia, undercover, vote
+
+        self.assertEqual(gen_ai.PROMPT, content.load_prompt("memory"))
+        self.assertEqual(trivia.PROMPT, content.load_prompt("trivia"))
+        self.assertEqual(trivia.SYSTEM_PROMPT,
+                         content.load_prompt("trivia", "system_prompt.md"))
+        self.assertEqual(draw.PROMPT, content.load_prompt("draw"))
+        self.assertEqual(undercover.PROMPT, content.load_prompt("undercover"))
+        self.assertEqual(vote.PROMPT, content.load_prompt("mostlikely"))
+        self.assertEqual(draw.FALLBACK, content.load_bank("draw")["words"])
+        self.assertEqual(undercover.FALLBACK,
+                         content.load_bank("undercover")["pairs"])
+        self.assertEqual(vote.FALLBACK,
+                         content.load_bank("mostlikely")["prompts"])
+        self.assertNotIn("[[", gen_ai.build_prompt(
+            ["林岚", "周澈"], n_infos=12, n_questions=8))
+        self.assertNotIn("[[", trivia.prompt_for(8, "综合", "困难"))
+
+        with self.assertRaises(ValueError):
+            content.content_path("unknown", "prompt.md")
+        with self.assertRaises(ValueError):
+            content.content_path("draw", "../prompt.md")
+
+    def test_clients_reset_current_choices_and_canvas_when_set_changes(self):
+        host = (ROOT / "web" / "host.js").read_text(encoding="utf-8")
+        player = (ROOT / "web" / "player.js").read_text(encoding="utf-8")
+
+        self.assertIn("s.set_rev", player)
+        self.assertIn("localChoice = null", player)
+        self.assertIn("localQ = -1", player)
+        self.assertIn("s.set_rev + ':' + d.no", player)
+        self.assertIn("s.set_rev + ':' + d.no", host)
+
+    def test_all_change_question_buttons_replace_the_current_set(self):
+        script = (ROOT / "web" / "host.js").read_text(encoding="utf-8")
+        lobby = script.split("function renderLobby", 1)[1].split(
+            "function renderBriefing", 1
+        )[0]
+
+        self.assertIn("换当前整套题", lobby)
+        self.assertIn("act('regenerate')", lobby)
+        self.assertNotIn("else act('generate')", lobby)
+
     def test_launcher_opens_game_hall(self):
         self.assertEqual(server.startup_url(8000), "http://localhost:8000/")
 

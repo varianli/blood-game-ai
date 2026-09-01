@@ -7,10 +7,10 @@
 
 import random
 
-from .. import gen_ai
+from .. import content as game_content, gen_ai
 from . import common
 
-SYSTEM_PROMPT = """你是严谨的中文现场知识竞赛主编。难度是硬性产品参数，不能因为题目用于聚会就擅自降低难度。所有答案必须稳定、可核验、无争议；选项必须处于同一比较维度，不能用明显荒谬的选项凑数。只返回合法 JSON。"""
+SYSTEM_PROMPT = game_content.load_prompt("trivia", "system_prompt.md")
 
 DIFFICULTY_GUIDES = {
     "简单": "多数普通成年人无需专业训练即可直接回忆作答，约 70% 为直接常识；difficulty 只能为 1 或 2。",
@@ -25,23 +25,7 @@ DIFFICULTY_GUIDES = {
 
 SCORE_RANGES = {"简单": (1, 2), "中等": (2, 3), "困难": (4, 5)}
 
-PROMPT = """请先在内部设计并筛选 {candidate_n} 道候选题，再只输出最符合要求的 {n} 道中文四选一知识抢答题。
-主题：{topic}
-难度：{level}
-难度硬标准：{difficulty_guide}
-
-通用要求：
-- 题干一句话，短而准确，适合在大屏上念。
-- 4 个选项互不相同，只有 1 个正确；错误选项必须具有真实迷惑性。
-- 答案应长期稳定、可核验、无争议，避免依赖实时数据。
-- 同一套题覆盖主题内的多个方向，不要集中在单一小类。
-- explain 用一句话说明答案依据。
-- difficulty 是 1-5 的整数，必须符合本次难度范围；无法确定时不要输出该题。
-
-只输出 JSON：
-{{"questions":[{{"text":"题干","options":["A","B","C","D"],"answer":0,
-                "explain":"一句话解释","difficulty":4}}]}}
-answer 是正确选项在 options 里的下标（0-3）。"""
+PROMPT = game_content.load_prompt("trivia")
 
 TOPICS = ["综合", "影视", "音乐", "历史", "地理", "科学", "体育", "美食",
           "动漫", "网络热梗"]
@@ -52,7 +36,8 @@ def prompt_for(n, topic, level):
     topic = topic if topic in TOPICS else "综合"
     level = level if level in LEVELS else "中等"
     candidate_n = min(40, max(n + 6, n * 2))
-    return PROMPT.format(
+    return game_content.render_prompt(
+        PROMPT,
         candidate_n=candidate_n,
         n=n,
         topic=topic,
@@ -128,7 +113,7 @@ def _clean(raw, n, rng, level="中等"):
 
 
 def _from_bank(n, topic, rng):
-    bank = common.load_bank("trivia_bank.json")
+    bank = common.load_bank("trivia")
     pool = [q for q in bank["questions"]
             if topic in ("综合", "", None) or q.get("topic") == topic]
     if len(pool) < n:

@@ -503,7 +503,7 @@
       act('settings', payload).then(function () {
         roomAiDraft.key = '';
         if ($('roomApiKey')) $('roomApiKey').value = '';
-        return act('generate');
+        return act('regenerate');
       }).then(function () {
         memoryDraft.open = false;
         toast('Memory 设置已保存，正在生成题库');
@@ -552,7 +552,8 @@
         '<small>推荐开启；本局进行时提前准备，再来一局可秒开。使用 DeepSeek 时会多一次 API 调用。</small>' +
         '</span></label>' : '') +
       '<div class="lobby-start-actions">' +
-      '<button class="btn ghost" id="bGen"' + (busy ? ' disabled' : '') + '>换一套题</button>' +
+      '<button class="btn ghost" id="bGen"' + (busy ? ' disabled' : '') +
+      '>换当前整套题</button>' +
       '<button class="btn" id="bStart"' + ((busy || memoryNeedsSet) ? ' disabled' : '') +
       ' style="padding:18px 44px;font-size:24px">' +
       (memoryNeedsSet ? '请先确认 Memory 设置' :
@@ -628,7 +629,7 @@
         roomAiDraft.model = model;
         roomAiDraft.key = '';
         aiKey.value = '';
-        return act('generate');
+        return act('regenerate');
       }).then(function () {
         toast('房间 AI 设置已保存，正在重新出题');
       }).catch(function () {
@@ -638,7 +639,10 @@
     };
     $('bGen').onclick = function () {
       if (isMemoryGame(s.game)) $('saveMemorySettings').click();
-      else act('generate');
+      else {
+        act('regenerate');
+        toast('正在替换当前整套题');
+      }
     };
     $('bStart').onclick = function () {
       roomAiDraft.key = '';
@@ -800,10 +804,11 @@
 
   /* ---------------- 你画我猜 ---------------- */
 
-  var strokeSince = 0, strokeTimer = null, lastRound = -1;
+  var strokeSince = 0, strokeTimer = null, lastDrawKey = '';
 
   function renderDraw(c, s) {
     var d = s.draw;
+    var drawKey = s.set_rev + ':' + d.no;
     if (s.phase === 'reveal' || s.phase === 'scoreboard') {
       if (s.phase === 'reveal') {
         c.innerHTML =
@@ -819,8 +824,8 @@
       return renderBoard(c, s, false);
     }
 
-    if (lastRound !== d.no) {
-      lastRound = d.no; strokeSince = 0;
+    if (lastDrawKey !== drawKey) {
+      lastDrawKey = drawKey; strokeSince = 0;
       c.innerHTML =
         '<div class="question-card timed-card">' + ring('rg', true) +
         '<div class="label">第 ' + d.no + ' / ' + d.total + ' 幅</div>' +
@@ -916,7 +921,7 @@
         '<button class="btn" id="bAgain">' +
         (s.next_ready ? '再来一局（题已备好）' : '换一套题，再来一局') + '</button>' +
         '<button class="btn ghost" id="bBack">回大厅</button></div>';
-      $('bAgain').onclick = function () { act('lobby').then(function () { act('generate'); }); };
+      $('bAgain').onclick = function () { act('lobby').then(function () { act('start'); }); };
       $('bBack').onclick = function () { act('lobby'); };
     } else {
       c.innerHTML =

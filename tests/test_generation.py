@@ -13,13 +13,37 @@ from unittest import mock
 
 import server
 from game import arrange, engine, gen_ai, gen_local
-from game.modes import trivia
+from game.modes import draw, trivia, undercover, vote
 
 
 SAMPLE_NAMES = ["林岚", "周澈", "陈星", "苏禾", "顾言", "唐悦"]
 
 
 class LocalGenerationTests(unittest.TestCase):
+    def test_each_game_can_build_from_its_organized_runtime_content(self):
+        expected_kinds = {
+            "blitz": None,
+            "classic": None,
+            "hardcore": None,
+            "trivia": trivia,
+            "mostlikely": vote,
+            "undercover": undercover,
+            "draw": draw,
+        }
+
+        for game_id, mode in expected_kinds.items():
+            with self.subTest(game=game_id):
+                room = engine.Room("2468", engine.default_settings())
+                room.game = game_id
+                room.settings.update(engine.catalog.preset_of(game_id))
+                game_set, _message = room._build()
+
+                self.assertTrue(game_set["questions"])
+                self.assertEqual(
+                    len(game_set["questions"]), room.settings["n_questions"])
+                if mode is not None:
+                    self.assertIn(game_set["source"], ("deepseek", "bank"))
+
     def test_bundled_demo_set_loads(self):
         game_set = engine.load_default_set(shuffle=False)
 
@@ -211,6 +235,63 @@ class AIGuardrailTests(unittest.TestCase):
 
 
 class GenerationRaceTests(unittest.TestCase):
+    def test_regenerate_replaces_current_set_for_every_game(self):
+        """“换一套”始终替换当前待开局题库，不能消费或改写下一套槽位。"""
+        game_ids = [
+            "blitz", "classic", "hardcore", "trivia",
+            "mostlikely", "undercover", "draw",
+        ]
+
+        class ImmediateThread(object):
+            def __init__(self, target, args=(), **_kwargs):
+                self.target = target
+                self.args = args
+
+            def start(self):
+                self.target(*self.args)
+
+        for game_id in game_ids:
+            with self.subTest(game=game_id):
+                room = engine.Room("2468", engine.default_settings())
+                room.game = game_id
+                room.game_name = engine.catalog.name_of(game_id)
+                room.settings.update(engine.catalog.preset_of(game_id))
+                current = {"title": "当前旧题", "source": "test",
+                           "infos": [], "questions": []}
+                cached_next = {"title": "后台下一套", "source": "test",
+                               "infos": [], "questions": []}
+                replacement = {"title": "手动换出的当前新题", "source": "test",
+                               "infos": [], "questions": []}
+                room.set = current
+                room.next_set = cached_next
+                room.next_msg = "后台缓存"
+                room.next_sig = room.sig()
+
+                with mock.patch.object(room, "_build",
+                                       return_value=(replacement, "手动换题完成")):
+                    with mock.patch("game.engine.threading.Thread", ImmediateThread):
+                        room.act("regenerate")
+
+                self.assertIs(room.set, replacement)
+                self.assertIsNot(room.set, cached_next)
+
+    def test_each_applied_set_gets_a_new_content_revision(self):
+        room = engine.Room("2468", engine.default_settings())
+        first = {"title": "第一套", "source": "test",
+                 "infos": [], "questions": []}
+        second = {"title": "第二套", "source": "test",
+                  "infos": [], "questions": []}
+
+        with room.lock:
+            room._apply(first, "第一套完成")
+        first_rev = room.snapshot(is_host=True)["set_rev"]
+        with room.lock:
+            room._apply(second, "第二套完成")
+        second_rev = room.snapshot(is_host=True)["set_rev"]
+
+        self.assertGreater(first_rev, 0)
+        self.assertGreater(second_rev, first_rev)
+
     def test_start_promotes_ready_next_set_before_entering_briefing(self):
         room = engine.Room("2468", engine.default_settings())
         current = {"title": "当前 A", "source": "test",

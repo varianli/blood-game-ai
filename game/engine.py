@@ -8,16 +8,14 @@
 """
 
 import json
-import os
 import random
 import threading
 import time
 import uuid
 
-from . import arrange, catalog, gen_ai, gen_local, modes
+from . import arrange, catalog, content, gen_ai, gen_local, modes
 
-BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_SET_PATH = os.path.join(BASE, "data", "default_set.json")
+DEFAULT_SET_PATH = str(content.content_path("memory", "default_set.json"))
 
 DEFAULT_NAMES = ["林岚", "周澈", "陈星", "苏禾", "顾言", "唐悦"]
 
@@ -87,6 +85,9 @@ class Room(object):
         self.order = []            # 加入顺序
         self.settings = settings
         self.set = None
+        # 每次替换当前题库都会递增。客户端不能只看“第 1 题”，否则新题库的
+        # 第 1 题会继承上一套第 1 题的本地选择或画板。
+        self.set_rev = 0
         self.phase = "lobby"
         self.deadline = None
         self.phase_sec = 0
@@ -177,6 +178,7 @@ class Room(object):
     def _apply(self, gs, msg, status="ok", start=False):
         """装上新题库并清零本局分数。调用前必须持有锁。"""
         self.set = gs
+        self.set_rev += 1
         self.gen = {"status": status, "msg": msg}
         for p in self.players.values():
             p.reset_round()
@@ -226,17 +228,21 @@ class Room(object):
         else:
             self.set_phase("briefing", self.settings["info_sec"])
 
-    def generate_async(self, start_after=False):
+    def generate_async(self, start_after=False, force_fresh=False):
         with self.lock:
             if self.gen["status"] == "running":
                 return
-            # 上一局玩的时候已经悄悄出好下一套了，直接拿来用，不用等
-            prepared = self._take_next()
+            # “开始下一局”可以接管后台缓存；“换一套题”必须重新生成并替换
+            # 当前待开局题库，两个意图不能再共用同一条含糊路径。
+            prepared = None if force_fresh else self._take_next()
             if prepared:
                 gs, msg = prepared
                 self._apply(gs, msg + "（提前出好的，秒开）", start=start_after)
                 bump()
                 return
+            if force_fresh:
+                self.start_after_gen = False
+                self._clear_next()
             self.gen = {"status": "running", "msg": "正在出题…",
                         "since": now_ms()}
             self.start_after_gen = start_after
@@ -339,6 +345,9 @@ class Room(object):
         with self.lock:
             if action == "generate":
                 self.generate_async(False)
+                return
+            if action == "regenerate":
+                self.generate_async(False, force_fresh=True)
                 return
             if action == "start":
                 if self.gen["status"] == "running":
@@ -450,6 +459,7 @@ class Room(object):
                     self.game_name = catalog.name_of(gid)
                     self.settings.update(catalog.preset_of(gid))
                     self.set = None
+                    self.set_rev += 1
                     self._clear_next()
                     self.gen = {"status": "idle", "msg": ""}
                     for p in self.players.values():
@@ -693,6 +703,7 @@ class Room(object):
                 "gen": self.gen,
                 "next_gen": self.next_gen,
                 "next_ready": self.next_set is not None,
+                "set_rev": self.set_rev,
                 "start_pending": bool(
                     self.start_after_gen and
                     self.next_gen.get("status") == "running"),

@@ -9,29 +9,11 @@
 import random
 import time
 
-from .. import gen_ai
+from .. import content as game_content, gen_ai
 from . import common
 
-PROMPT = """出 {n} 组「谁是卧底」用的词对。每组两个词，要求：
-
-- 两个词是同类、容易混淆的东西，但确实有区别（比如 拿铁/美式、地铁/轻轨、可乐/雪碧）。
-- 都是日常生活里常见的，一句话就能描述出来的具体事物。
-- 不要抽象概念，不要专业术语，不要人名地名。
-- {n} 组之间不要重复，类别要铺开（吃的、喝的、用的、玩的、交通、动物都来一点）。
-
-只输出 JSON：{{"pairs":[["词A","词B"],["词A","词B"]]}}"""
-
-FALLBACK = [
-    ["拿铁", "美式"], ["地铁", "轻轨"], ["可乐", "雪碧"], ["苹果", "梨"],
-    ["火锅", "麻辣烫"], ["篮球", "排球"], ["空调", "风扇"], ["猫", "老虎"],
-    ["牙刷", "梳子"], ["书包", "行李箱"], ["雨伞", "阳伞"], ["面条", "米线"],
-    ["电影院", "剧场"], ["沙发", "床"], ["钢笔", "铅笔"], ["草莓", "樱桃"],
-    ["微波炉", "烤箱"], ["耳机", "音箱"], ["运动鞋", "拖鞋"], ["酸奶", "牛奶"],
-    ["公交车", "大巴"], ["蛋糕", "面包"], ["手表", "手环"], ["西瓜", "哈密瓜"],
-    ["理发店", "美容院"], ["图书馆", "书店"], ["泳池", "海边"], ["象棋", "围棋"],
-    ["奶茶", "果茶"], ["饺子", "馄饨"], ["台灯", "吊灯"], ["公园", "广场"],
-    ["自行车", "电动车"], ["咖啡厅", "茶馆"], ["毛衣", "卫衣"], ["烧烤", "铁板烧"],
-]
+PROMPT = game_content.load_prompt("undercover")
+FALLBACK = game_content.load_bank("undercover")["pairs"]
 
 
 def build(room):
@@ -41,7 +23,7 @@ def build(room):
     try:
         content = gen_ai.chat(
             s.get("api_key"), s.get("model"),
-            [{"role": "user", "content": PROMPT.format(n=n)}],
+            [{"role": "user", "content": game_content.render_prompt(PROMPT, n=n)}],
             timeout=300, max_tokens=gen_ai.GEN_TOKENS, temperature=1.2)
         obj = gen_ai._loads(content)
         pairs = []

@@ -2,7 +2,7 @@
 """本地题库生成器。
 
 每局随机抽取人物设定与数值，再由代码算出正确答案 —— 所以数学一定是对的。
-输出格式与 data/default_set.json 完全一致：
+输出格式与 games/memory/default_set.json 完全一致：
     {"infos": [30 条信息], "questions": [15 道题]}
 每道题：{"text", "options"(4), "answer"(索引), "explain", "uses"(用到第几条信息)}
 """

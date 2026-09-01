@@ -1,19 +1,14 @@
 # -*- coding: utf-8 -*-
 """几个玩法都要用的小工具。"""
 
-import json
-import os
 import random
 import re
 
-DATA = os.path.join(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))), "..", "data")
+from .. import content
 
 
-def load_bank(filename):
-    path = os.path.normpath(os.path.join(DATA, filename))
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+def load_bank(game, filename="bank.json"):
+    return content.load_bank(game, filename)
 
 
 def speed_score(left_ms, total_ms, base=600, bonus=400):

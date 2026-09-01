@@ -33,7 +33,7 @@
 
 知识抢答、谁最可能、卧底找茬和你画我猜也可以调用 DeepSeek 动态生成主题内容。API Key 与模型按房间设置，输入一次即可跨玩法共用。知识抢答的简单、中等、困难不是文字标签：提示词规定可执行的难度标准，服务端还会按 `difficulty` 分数过滤不达标题目；调用或校验失败时会明确显示“难度降级”，再用基础题库继续游戏。
 
-Memory 的节目题型拆解、内容配额与 Prompt 硬约束统一维护在 [`docs/memory30_style_guide.md`](docs/memory30_style_guide.md)。DeepSeek 全量生成会在运行时读取这份文档，而不是只把它当作说明材料。
+所有玩法的 Prompt、规则说明与本地题库都按游戏整理在 [`games/`](games/)；其中 Memory 的节目题型拆解与硬约束位于 [`games/memory/style_guide.md`](games/memory/style_guide.md)。这些 Markdown 和 JSON 都由程序在运行时直接读取，不是另存一份的说明材料。
 
 ### 2. 模型输出 Guardrails
 
@@ -45,7 +45,9 @@ Memory 的节目题型拆解、内容配额与 Prompt 硬约束统一维护在 [
 
 ### 3. 延迟与可用性设计
 
-- 第一套题生成后，后台预生成下一套并缓存，“再来一局”无需重新等待。
+- Memory 开局后可后台预生成下一套并缓存，“再来一局”无需重新等待。
+- “换一套题”与“使用下一套缓存”是两条独立路径：前者统一替换当前待开局题库，后者只在开始下一局时接管。
+- 每套内容都有独立版本号，手机选择状态和绘画画板不会从上一套带进新题。
 - 网络异常、余额不足、Key 无效或模型输出不合格时，自动降级到本地生成器。
 - 本地生成器同时承担可靠兜底：答案由程序计算，避免 LLM 算术错误中断现场体验。
 
@@ -152,9 +154,15 @@ game/
   engine.py               房间状态机、计分、预生成与降级
   gen_local.py            确定性本地题库生成器
   gen_ai.py               DeepSeek 生成、润色与输出校验
+  content.py              games/ 内容文件的统一运行时读取入口
   catalog.py              玩法目录与默认参数
   modes/                  知识、投票、卧底、绘画等玩法模块
-data/default_set.json     匿名示例题库
+games/                    按玩法整理的 README、实际 Prompt 与本地题库
+  memory/                 Memory 三档共用内容与节目风格规范
+  trivia/                 知识抢答 Prompt、系统 Prompt 与基础题库
+  mostlikely/             谁最可能 Prompt 与本地问题池
+  undercover/             卧底找茬 Prompt 与本地词对
+  draw/                   你画我猜 Prompt 与本地词库
 web/                      游戏厅、主持人端、玩家端与样式
 tests/                    生成护栏测试与多人端到端模拟
 ```

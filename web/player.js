@@ -2,7 +2,7 @@
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   var room = null, pid = null, offset = 0, S = null, lastV = -1;
-  var localChoice = null, localQ = -1;
+  var localChoice = null, localQ = -1, localSetRev = -1;
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -142,6 +142,12 @@
 
   function render(prev) {
     var s = S, m = $('pMain');
+    if (localSetRev !== s.set_rev) {
+      localSetRev = s.set_rev;
+      localChoice = null;
+      localQ = -1;
+      pad = null;
+    }
     if (s.you) {
       $('pName').textContent = s.you.name;
       $('pScore').textContent = s.you.score;
@@ -344,9 +350,10 @@
   function renderDraw(m, s, prev) {
     var d = s.draw, you = s.you || {};
     if (!d) return false;
+    var drawKey = s.set_rev + ':' + d.no;
 
     if (s.phase === 'question' && you.is_drawer) {
-      if (!pad || pad.round !== d.no) {
+      if (!pad || pad.key !== drawKey) {
         m.innerHTML = '<div class="phone-question-card timed-card">' +
           cornerTimer('prg') + '<div class="label">该你画了 · 第 ' +
           d.no + ' / ' + d.total + ' 幅</div>' +
@@ -356,7 +363,7 @@
           '<button class="btn ghost" id="undo" style="flex:1">撤一笔</button>' +
           '<button class="btn ghost" id="clr" style="flex:1">全清</button></div>' +
           '<div id="gfeed" class="gfeed"></div>';
-        setupPad(d.no);
+        setupPad(drawKey);
       }
       renderFeed(d);
       return true;
@@ -419,7 +426,7 @@
     });
   }
 
-  function setupPad(round) {
+  function setupPad(drawKey) {
     var cv = $('cv');
     if (!cv) return;
     var rect = cv.getBoundingClientRect();
@@ -430,7 +437,7 @@
     ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     ctx.strokeStyle = '#111'; ctx.lineWidth = 6;
-    pad = { round: round, ctx: ctx, cv: cv, pts: [], all: [] };
+    pad = { key: drawKey, ctx: ctx, cv: cv, pts: [], all: [] };
 
     function xy(e) {
       var r = cv.getBoundingClientRect();
