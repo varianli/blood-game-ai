@@ -857,6 +857,43 @@ code { background: #24101a; padding: 2px 7px; border-radius: 5px;
 }
 .room-ai-panel-body .grid2 { width: 100%; margin-top: 12px; }
 .room-ai-panel-body .btn { align-self: flex-start; }
+.memory-lobby-panel {
+  width: min(900px, 100%);
+  border-color: rgba(239, 181, 74, .38);
+  background:
+    radial-gradient(circle at 0 0, rgba(239, 181, 74, .09), transparent 34%),
+    linear-gradient(135deg, rgba(224, 30, 55, .07), rgba(20, 8, 13, .9));
+}
+.memory-lobby-panel summary::before { color: var(--gold); }
+.memory-lobby-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.2fr) minmax(260px, .8fr);
+  gap: 18px;
+  width: 100%;
+  padding-top: 12px;
+}
+.memory-name-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 8px;
+}
+.memory-name-row { display: flex; align-items: center; gap: 5px; }
+.memory-name-row .field { min-width: 0; padding: 9px 10px; }
+.memory-name-remove {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(224, 30, 55, .3);
+  border-radius: 8px;
+  color: var(--muted);
+  background: rgba(224, 30, 55, .055);
+  font-size: 18px;
+  line-height: 1;
+}
+.memory-name-remove:hover { color: #fff; border-color: var(--blood); }
+.memory-add-name { margin-top: 2px; padding: 8px 12px; }
+.memory-mode-fields { display: flex; flex-direction: column; gap: 12px; }
+.memory-mode-fields > .btn { align-self: stretch; }
 .namelist { display: flex; flex-wrap: wrap; gap: 8px; }
 .namelist .ntag {
   display: flex; align-items: center; gap: 8px; background: #24101a;
@@ -1017,6 +1054,8 @@ code { background: #24101a; padding: 2px 7px; border-radius: 5px;
   .timing-flow span { padding-inline: 8px; font-size: 11px; }
   .room-ai-panel summary { flex-wrap: wrap; }
   .ai-state { margin-left: 0; }
+  .memory-lobby-grid { grid-template-columns: 1fr; }
+  .memory-name-list { grid-template-columns: 1fr 1fr; }
   .live-ranking { max-height: 150px; padding: 13px; }
   .live-ranking-list { grid-template-columns: repeat(3, minmax(130px, 1fr)); }
   .live-rank-row:nth-child(n+4) { display: none; }

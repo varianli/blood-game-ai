@@ -180,6 +180,48 @@ class ProductContractTests(unittest.TestCase):
 
         self.assertNotIn("api_key", script[start:end])
 
+    def test_existing_room_memory_switch_waits_for_memory_configuration(self):
+        script = (ROOT / "web" / "host.js").read_text(encoding="utf-8")
+
+        self.assertIn("function isMemoryGame", script)
+        switch = script.split("function switchToGame", 1)[1].split(
+            "/* ---------------- 控制", 1
+        )[0]
+        self.assertIn("memoryDraft.open = needsMemorySetup", switch)
+        self.assertIn("if (!needsMemorySetup) return act('generate');", switch)
+        self.assertIn("switchToGame(gameId)", script)
+        self.assertIn("switchToGame(sw.value)", script)
+
+    def test_memory_lobby_panel_can_update_names_and_generation_mode(self):
+        script = (ROOT / "web" / "host.js").read_text(encoding="utf-8")
+        css = (ROOT / "web" / "app.css").read_text(encoding="utf-8")
+
+        panel = script.split("function memorySettingsPanel", 1)[1].split(
+            "function captureMemoryDraft", 1
+        )[0]
+        self.assertIn('id="memorySettingsPanel"', panel)
+        self.assertIn("memory-name-input", panel)
+        self.assertIn('id="memoryGenerator"', panel)
+        self.assertIn('id="memoryInfoCount"', panel)
+        self.assertIn('id="memoryQuestionCount"', panel)
+        self.assertIn('id="saveMemorySettings"', panel)
+        self.assertNotIn("api_key", panel)
+        self.assertIn("act('settings', payload)", script)
+        self.assertIn("return act('generate');", script)
+        self.assertIn(".memory-lobby-panel", css)
+
+    def test_room_bounds_memory_names_and_rejects_unknown_generator(self):
+        room = engine.Room("1357", engine.default_settings())
+        original_generator = room.settings["generator"]
+        names = ["  玩家%02d名字很长很长  " % i for i in range(25)]
+
+        room.act("settings", {"names": names, "generator": "not-a-mode"})
+
+        self.assertEqual(room.settings["generator"], original_generator)
+        self.assertEqual(len(room.settings["names"]), 20)
+        self.assertTrue(all(1 <= len(name) <= 12
+                            for name in room.settings["names"]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,8 @@
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -58,6 +60,43 @@ class AIGuardrailTests(unittest.TestCase):
         self.assertEqual(result["infos"][0], source["infos"][0])
         self.assertEqual(result["infos"][1], "周澈每天能卖出整整 20 杯咖啡。")
         self.assertEqual(result["source"], "local+deepseek")
+
+
+class GenerationRaceTests(unittest.TestCase):
+    def test_finished_generation_cannot_overwrite_a_new_game(self):
+        room = engine.Room("2468", engine.default_settings())
+        old_started = threading.Event()
+        release_old = threading.Event()
+
+        old_set = {"title": "旧知识问答", "source": "test",
+                   "infos": [], "questions": []}
+        new_set = {"title": "新 Memory 题库", "source": "test",
+                   "infos": [], "questions": []}
+
+        def build_for_current_game(current_room):
+            if current_room.game == "trivia":
+                old_started.set()
+                release_old.wait(1)
+                return old_set, "旧玩法出题完成"
+            return new_set, "新玩法出题完成"
+
+        with mock.patch.object(engine.Room, "_build", build_for_current_game):
+            room.act("switch_game", {"game": "trivia"})
+            room.generate_async()
+            self.assertTrue(old_started.wait(1))
+
+            room.act("switch_game", {"game": "classic"})
+            room.generate_async()
+            deadline = time.time() + 1
+            while room.gen["status"] == "running" and time.time() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(room.set["title"], "新 Memory 题库")
+
+            release_old.set()
+            time.sleep(0.1)
+
+        self.assertEqual(room.game, "classic")
+        self.assertEqual(room.set["title"], "新 Memory 题库")
 
 
 class TriviaDifficultyTests(unittest.TestCase):

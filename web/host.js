@@ -4,6 +4,10 @@
   var $ = function (id) { return document.getElementById(id); };
   var room = null, hk = null, joinUrl = '', offset = 0, S = null, lastV = -1;
   var roomAiDraft = { key: '', model: '', open: false };
+  var memoryDraft = {
+    game: '', initialized: false, open: false,
+    names: [], generator: '', nInfos: '', nQuestions: ''
+  };
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -54,6 +58,9 @@
 
   var gameId = new URLSearchParams(location.search).get('game') || 'classic';
   var kind = 'deduce';
+  function isMemoryGame(gid) {
+    return ['blitz', 'classic', 'hardcore'].indexOf(gid) >= 0;
+  }
   var LEVEL_HELP = {
     '简单': '常识热身：多数普通成年人可以直接回忆作答，适合第一次参与。',
     '中等': '知识挑战：需要扎实通识或一步联想，干扰项来自相邻概念。',
@@ -153,14 +160,30 @@
           $('tRoom').textContent = room;
           // 从游戏厅挑了别的玩法回来 —— 换掉当前房间的游戏，玩家不用重扫码
           if (keep && s.game !== gameId) {
-            act('switch_game', { game: gameId });
-            act('generate');
-            toast('已换成新玩法，玩家不用重新扫码，总分接着累加');
+            switchToGame(gameId);
           }
           poll();
         }).catch(function () { });
     }
   } catch (e) { }
+
+  function switchToGame(gid) {
+    var needsMemorySetup = isMemoryGame(gid);
+    gameId = gid;
+    memoryDraft.initialized = false;
+    memoryDraft.open = needsMemorySetup;
+    try {
+      var saved = JSON.parse(localStorage.getItem('xzyx_host') || 'null');
+      if (saved) {
+        saved.game = gid;
+        localStorage.setItem('xzyx_host', JSON.stringify(saved));
+      }
+    } catch (e) { }
+    return act('switch_game', { game: gid }).then(function () {
+      if (!needsMemorySetup) return act('generate');
+      toast('已切换到 Memory，请确认人物与出题方式后生成');
+    });
+  }
 
   /* ---------------- 控制 ---------------- */
 
@@ -336,9 +359,164 @@
     if ($('roomApiKey')) roomAiDraft.key = $('roomApiKey').value;
   }
 
-  function renderLobby(c, s) {
-    captureRoomAiDraft();
+  function ensureMemoryDraft(s) {
+    if (memoryDraft.initialized && memoryDraft.game === s.game) return;
+    memoryDraft.game = s.game;
+    memoryDraft.initialized = true;
+    memoryDraft.names = (s.settings.names || DEFAULT_NAMES).slice(0, 20);
+    memoryDraft.generator = s.settings.generator || 'local';
+    memoryDraft.nInfos = String(s.settings.n_infos || 30);
+    memoryDraft.nQuestions = String(s.settings.n_questions || 15);
+  }
+
+  function memorySettingsPanel(s) {
+    if (!isMemoryGame(s.game)) return '';
+    ensureMemoryDraft(s);
+    var names = memoryDraft.names.map(function (name, index) {
+      return '<div class="memory-name-row">' +
+        '<input class="field memory-name-input" maxlength="12" value="' +
+        esc(name) + '" aria-label="人物 ' + (index + 1) + '">' +
+        '<button type="button" class="memory-name-remove" data-index="' + index +
+        '" aria-label="删除人物 ' + (index + 1) + '">×</button></div>';
+    }).join('');
+    var options = [
+      ['local', '本地随机生成 · 秒出且答案可靠'],
+      ['polish', '本地计算 + DeepSeek 润色'],
+      ['ai', 'DeepSeek 全量生成'],
+      ['default', '内置默认题库']
+    ].map(function (option) {
+      return '<option value="' + option[0] + '"' +
+        (memoryDraft.generator === option[0] ? ' selected' : '') + '>' +
+        option[1] + '</option>';
+    }).join('');
+    var source = s.has_set ? ('当前已生成：' + (s.set_title || '题库')) : '等待确认设置';
+    return '<details class="room-ai-panel memory-lobby-panel" id="memorySettingsPanel"' +
+      ((memoryDraft.open || !s.has_set) ? ' open' : '') + '>' +
+      '<summary><span>Memory 本局设置</span>' +
+      '<span class="ai-state ' + (s.has_set ? 'ok' : 'idle') + '">' +
+      esc(source) + '</span></summary>' +
+      '<div class="room-ai-panel-body"><div class="memory-lobby-grid">' +
+      '<div class="frow memory-names-field"><span class="label">题目人物</span>' +
+      '<div class="memory-name-list" id="memoryNameInputs">' + names + '</div>' +
+      '<button type="button" class="btn ghost memory-add-name" id="addMemoryName">+ 加一个人物</button></div>' +
+      '<div class="memory-mode-fields"><label class="frow"><span class="label">出题方式</span>' +
+      '<select class="field" id="memoryGenerator">' + options + '</select></label>' +
+      '<div class="grid2"><label class="frow"><span class="label">信息条数</span>' +
+      '<input class="field" id="memoryInfoCount" type="number" min="6" max="60" value="' +
+      esc(memoryDraft.nInfos) + '"></label>' +
+      '<label class="frow"><span class="label">题目数量</span>' +
+      '<input class="field" id="memoryQuestionCount" type="number" min="3" max="40" value="' +
+      esc(memoryDraft.nQuestions) + '"></label></div>' +
+      '<div class="note">选择 DeepSeek 时会使用本房间下方的 AI 设置；人物与模式只影响本局。</div>' +
+      '<button class="btn" id="saveMemorySettings">保存设置并生成题库</button></div>' +
+      '</div></div></details>';
+  }
+
+  function captureMemoryDraft() {
+    var panel = $('memorySettingsPanel');
+    if (!panel) return;
+    memoryDraft.open = panel.open;
+    memoryDraft.names = Array.prototype.map.call(
+      panel.querySelectorAll('.memory-name-input'),
+      function (input) { return input.value; });
+    if ($('memoryGenerator')) memoryDraft.generator = $('memoryGenerator').value;
+    if ($('memoryInfoCount')) memoryDraft.nInfos = $('memoryInfoCount').value;
+    if ($('memoryQuestionCount')) memoryDraft.nQuestions = $('memoryQuestionCount').value;
+  }
+
+  function collectMemoryPayload(s) {
+    if (!isMemoryGame(s.game)) return {};
+    captureMemoryDraft();
+    var names = memoryDraft.names.map(function (name) {
+      return name.trim().slice(0, 12);
+    }).filter(Boolean).slice(0, 20);
+    if (names.length < 2) {
+      toast('Memory 至少需要 2 个人物');
+      return null;
+    }
+    var nInfos = Math.max(6, Math.min(60, parseInt(memoryDraft.nInfos, 10) || 30));
+    var nQuestions = Math.max(3, Math.min(40,
+      parseInt(memoryDraft.nQuestions, 10) || 15));
+    memoryDraft.names = names;
+    memoryDraft.nInfos = String(nInfos);
+    memoryDraft.nQuestions = String(nQuestions);
+    return {
+      names: names,
+      generator: memoryDraft.generator,
+      n_infos: nInfos,
+      n_questions: nQuestions
+    };
+  }
+
+  function bindMemorySettings(c, s) {
+    var panel = $('memorySettingsPanel');
+    if (!panel) return;
+    panel.open = memoryDraft.open || !s.has_set;
+    panel.ontoggle = function () { memoryDraft.open = panel.open; };
+
+    $('addMemoryName').onclick = function () {
+      captureMemoryDraft();
+      captureRoomAiDraft();
+      if (memoryDraft.names.length >= 20) {
+        toast('人物最多 20 个');
+        return;
+      }
+      memoryDraft.names.push('');
+      memoryDraft.open = true;
+      renderLobby(c, s, true);
+      var inputs = document.querySelectorAll('.memory-name-input');
+      if (inputs.length) inputs[inputs.length - 1].focus();
+    };
+    Array.prototype.forEach.call(
+      panel.querySelectorAll('.memory-name-remove'), function (button) {
+        button.onclick = function () {
+          captureMemoryDraft();
+          captureRoomAiDraft();
+          memoryDraft.names.splice(parseInt(button.getAttribute('data-index'), 10), 1);
+          memoryDraft.open = true;
+          renderLobby(c, s, true);
+        };
+      });
+
+    $('memoryGenerator').onchange = function () {
+      memoryDraft.generator = $('memoryGenerator').value;
+    };
+    $('saveMemorySettings').disabled = s.gen.status === 'running';
+    $('saveMemorySettings').onclick = function () {
+      var payload = collectMemoryPayload(s);
+      if (!payload) return;
+      var needsAi = payload.generator === 'ai' || payload.generator === 'polish';
+      var pendingKey = $('roomApiKey') ? $('roomApiKey').value.trim() : roomAiDraft.key.trim();
+      if (needsAi && !s.api_key_set && !pendingKey) {
+        roomAiDraft.open = true;
+        if ($('roomAiPanel')) $('roomAiPanel').open = true;
+        toast('选择 DeepSeek 前，请先在房间 AI 设置中输入 API Key');
+        if ($('roomApiKey')) $('roomApiKey').focus();
+        return;
+      }
+      if (pendingKey) payload.api_key = pendingKey;
+      $('saveMemorySettings').disabled = true;
+      act('settings', payload).then(function () {
+        roomAiDraft.key = '';
+        if ($('roomApiKey')) $('roomApiKey').value = '';
+        return act('generate');
+      }).then(function () {
+        memoryDraft.open = false;
+        toast('Memory 设置已保存，正在生成题库');
+      }).catch(function () {
+        $('saveMemorySettings').disabled = false;
+        toast('保存失败，请检查服务是否仍在运行');
+      });
+    };
+  }
+
+  function renderLobby(c, s, draftReady) {
+    if (!draftReady) {
+      captureMemoryDraft();
+      captureRoomAiDraft();
+    }
     var busy = s.gen.status === 'running';
+    var memoryNeedsSet = isMemoryGame(s.game) && !s.has_set;
     c.innerHTML =
       '<div class="roomcode">' + esc(s.room) + '</div>' +
       '<div class="joinbox">' +
@@ -357,12 +535,14 @@
       (busy ? '<span id="genSec"></span>' : '') +
       (s.has_set ? '　·　' + esc(s.set_title) + '（' + s.n_info_total +
         ' 条信息 / ' + s.n_q_total + ' 道题）' : '') + '</div>' +
+      memorySettingsPanel(s) +
       roomAiPanel(s) +
       nextTag(s) +
       '<div style="display:flex;gap:14px;flex-wrap:wrap;justify-content:center">' +
       '<button class="btn ghost" id="bGen"' + (busy ? ' disabled' : '') + '>换一套题</button>' +
-      '<button class="btn" id="bStart"' + (busy ? ' disabled' : '') +
-      ' style="padding:18px 44px;font-size:24px">开始游戏</button></div>';
+      '<button class="btn" id="bStart"' + ((busy || memoryNeedsSet) ? ' disabled' : '') +
+      ' style="padding:18px 44px;font-size:24px">' +
+      (memoryNeedsSet ? '请先确认 Memory 设置' : '开始游戏') + '</button></div>';
 
     var chips = $('chips');
     if (!s.board.length) {
@@ -383,10 +563,11 @@
               '>' + g.emoji + ' ' + g.name + '</option>';
           }).join('');
         sw.onchange = function () {
-          if (sw.value) { gameId = sw.value; act('switch_game', { game: sw.value }); }
+          if (sw.value) switchToGame(sw.value);
         };
       }).catch(function () { });
     }
+    bindMemorySettings(c, s);
     var aiPanel = $('roomAiPanel');
     var aiModel = $('roomAiModel');
     var aiKey = $('roomApiKey');
@@ -411,6 +592,11 @@
         return;
       }
       var payload = { model: model };
+      var memoryPayload = collectMemoryPayload(s);
+      if (memoryPayload === null) return;
+      Object.keys(memoryPayload).forEach(function (name) {
+        payload[name] = memoryPayload[name];
+      });
       if (key) payload.api_key = key;
       $('saveRoomAi').disabled = true;
       act('settings', payload).then(function () {
@@ -425,7 +611,10 @@
         toast('保存失败，请检查服务是否仍在运行');
       });
     };
-    $('bGen').onclick = function () { act('generate'); };
+    $('bGen').onclick = function () {
+      if (isMemoryGame(s.game)) $('saveMemorySettings').click();
+      else act('generate');
+    };
     $('bStart').onclick = function () {
       roomAiDraft.key = '';
       act('start');

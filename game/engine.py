@@ -96,6 +96,7 @@ class Room(object):
         self.q_i = 0
         self.gen = {"status": "idle", "msg": ""}
         self.start_after_gen = False
+        self.generation_rev = 0
         self.created = now_ms()
         self.game = "classic"           # 首页选的玩法
         self.game_name = ""
@@ -212,11 +213,16 @@ class Room(object):
             self.gen = {"status": "running", "msg": "正在出题…",
                         "since": now_ms()}
             self.start_after_gen = start_after
+            self.generation_rev += 1
+            generation_rev = self.generation_rev
+            generation_sig = self.sig()
             self.touch()
         bump()
-        threading.Thread(target=self._generate, daemon=True).start()
+        threading.Thread(target=self._generate,
+                         args=(generation_rev, generation_sig),
+                         daemon=True).start()
 
-    def _generate(self):
+    def _generate(self, generation_rev, generation_sig):
         s = self.settings
         names = s["names"] or DEFAULT_NAMES
         try:
@@ -232,6 +238,11 @@ class Room(object):
             msg = "%s —— 已自动改用本地题库" % e
 
         with self.lock:
+            # 出题期间可能已经切换玩法或修改了出题设置。旧线程即使后来
+            # 成功，也不能覆盖新玩法正在使用的题库与生成状态。
+            if (generation_rev != self.generation_rev or
+                    generation_sig != self.sig()):
+                return
             start = self.start_after_gen
             self.start_after_gen = False
             self._apply(gs, msg, status=status, start=start)
@@ -332,6 +343,7 @@ class Room(object):
             elif action == "lobby":
                 self.set_phase("lobby")
             elif action == "settings":
+                old_sig = self.sig()
                 for k in ("info_sec", "question_sec", "reveal_sec", "board_sec",
                           "describe_sec"):
                     if k in payload:
@@ -339,13 +351,18 @@ class Room(object):
                 for k in ("topic", "level"):
                     if payload.get(k):
                         self.settings[k] = str(payload[k])[:20]
-                if "names" in payload:
-                    self.settings["names"] = [
-                        str(x).strip() for x in payload["names"] if str(x).strip()]
+                if "names" in payload and isinstance(payload["names"], (list, tuple)):
+                    names = []
+                    for value in payload["names"][:20]:
+                        name = str(value).strip()[:12]
+                        if name:
+                            names.append(name)
+                    if names:
+                        self.settings["names"] = names
                 for k in ("n_infos", "n_questions"):
                     if k in payload:
                         self.settings[k] = max(3, min(80, int(payload[k])))
-                if "generator" in payload:
+                if payload.get("generator") in ("local", "polish", "ai", "default"):
                     self.settings["generator"] = payload["generator"]
                 if "auto" in payload:
                     self.settings["auto"] = bool(payload["auto"])
@@ -353,10 +370,17 @@ class Room(object):
                     self.settings["api_key"] = str(payload["api_key"]).strip()[:512]
                 if payload.get("model"):
                     self.settings["model"] = str(payload["model"]).strip()[:100]
+                if self.sig() != old_sig:
+                    self.generation_rev += 1
+                    self.start_after_gen = False
+                    if self.gen.get("status") == "running":
+                        self.gen = {"status": "idle", "msg": ""}
                 self.touch()
             elif action == "switch_game":
                 gid = str(payload.get("game") or "")
                 if gid in catalog.BY_ID:
+                    self.generation_rev += 1
+                    self.start_after_gen = False
                     # 换游戏但留住玩家和总分：先把没结算的本局分收进总分
                     if not self.banked and self.set:
                         for p in self.players.values():
