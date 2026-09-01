@@ -256,19 +256,23 @@ class Room(object):
                          daemon=True).start()
 
     def _generate(self, generation_rev, generation_sig):
-        s = self.settings
-        names = s["names"] or DEFAULT_NAMES
         try:
             gs, msg = self._build()
-            status = "ok"
         except Exception as e:
-            try:
-                gs = gen_local.generate(names, s["n_infos"], s["n_questions"],
-                                        seed=random.randrange(1 << 30))
-            except Exception:
-                gs = load_default_set()
-            status = "fallback"
-            msg = "%s —— 已自动改用本地题库" % e
+            with self.lock:
+                if (generation_rev != self.generation_rev or
+                        generation_sig != self.sig()):
+                    return
+                self.start_after_gen = False
+                self.gen = {
+                    "status": "error",
+                    "msg": ("❌ 出题失败：%s。未改用本地题库；请重试，"
+                            "或由你主动选择本地出题。" % e),
+                }
+                # 保留当前已经确认过的题库；失败的请求不能偷偷替换它。
+                self.touch()
+            bump()
+            return
 
         with self.lock:
             # 出题期间可能已经切换玩法或修改了出题设置。旧线程即使后来
@@ -278,7 +282,7 @@ class Room(object):
                 return
             start = self.start_after_gen
             self.start_after_gen = False
-            self._apply(gs, msg, status=status, start=start)
+            self._apply(gs, msg, status="ok", start=start)
         bump()
 
     # ---------------- 预生成下一套 ----------------
@@ -310,29 +314,20 @@ class Room(object):
                 else:
                     started = self._finish_prefetch(gs, msg)
         except Exception as e:
-            # DeepSeek 出岔子也不能让下一局干等 —— 退而求其次存一套本地的，
-            # 保证「再来一局」永远是秒开
-            try:
-                s = self.settings
-                gs = gen_local.generate(s["names"] or DEFAULT_NAMES,
-                                        s["n_infos"], s["n_questions"],
-                                        seed=random.randrange(1 << 30))
-                with self.lock:
-                    if (sig == self.sig() and
-                            self.settings.get("prefetch_next", True)):
-                        started = self._finish_prefetch(
-                            gs,
-                            "本地综艺风格生成（DeepSeek 预生成失败：%s）" % e,
-                            "下一套题已就绪（DeepSeek 预生成失败：%s，"
-                            "改用了本地题库）" % e,
-                        )
-                    else:
-                        self._clear_next()
-            except Exception:
-                with self.lock:
+            with self.lock:
+                if (sig != self.sig() or
+                        not self.settings.get("prefetch_next", True)):
+                    self._clear_next()
+                else:
                     self.start_after_gen = False
-                    self.next_gen = {"status": "error",
-                                     "msg": "预生成失败：%s" % e}
+                    self.next_set = None
+                    self.next_msg = ""
+                    self.next_gen = {
+                        "status": "error",
+                        "msg": ("DeepSeek 预生成失败：%s。未改用本地题库；"
+                                "下次开始时会重新尝试。" % e),
+                    }
+                    self.touch()
         bump()
         # B 已经自动开局后，继续在后台准备 C，下一局仍然不用等。
         if started:

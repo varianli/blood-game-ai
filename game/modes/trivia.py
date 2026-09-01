@@ -53,29 +53,29 @@ def build(room):
     level = s.get("level") if s.get("level") in LEVELS else "中等"
     rng = random.Random()
 
-    try:
-        content = gen_ai.chat(
-            s.get("api_key"), s.get("model"),
-            [{"role": "system", "content": SYSTEM_PROMPT},
-             {"role": "user", "content": prompt_for(n, topic, level)}],
-            timeout=gen_ai.QUALITY_TIMEOUT,
-            max_tokens=gen_ai.GEN_TOKENS, temperature=1.1)
-        obj = gen_ai._loads(content)
-        qs = _clean(obj.get("questions"), n, rng, level)
-        if len(qs) < n:
-            raise gen_ai.AIError("可用题目太少（%d 道）" % len(qs))
-        return ({"title": "DeepSeek 严格出题 · %s · %s" % (topic, level),
-                 "source": "deepseek", "requested_level": level,
-                 "difficulty_guaranteed": True,
-                 "infos": [], "questions": qs},
-                "DeepSeek 出题成功（%s / %s）" % (topic, level))
-    except Exception as e:
+    if not s.get("api_key"):
         qs = _from_bank(n, topic, rng)
-        return ({"title": "内置基础题库 · %s · 难度降级" % topic,
+        return ({"title": "内置基础题库 · %s · 未启用 AI" % topic,
                  "source": "bank", "requested_level": level,
                  "difficulty_guaranteed": False,
                  "infos": [], "questions": qs},
-                "%s —— 已改用内置基础题库，未保证「%s」难度" % (e, level))
+                "未配置 DeepSeek，使用内置基础题库；未保证「%s」难度" % level)
+
+    content = gen_ai.chat(
+        s.get("api_key"), s.get("model"),
+        [{"role": "system", "content": SYSTEM_PROMPT},
+         {"role": "user", "content": prompt_for(n, topic, level)}],
+        timeout=gen_ai.QUALITY_TIMEOUT,
+        max_tokens=gen_ai.GEN_TOKENS, temperature=1.1)
+    obj = gen_ai._loads(content)
+    qs = _clean(obj.get("questions"), n, rng, level)
+    if len(qs) < n:
+        raise gen_ai.AIError("可用题目太少（%d 道）" % len(qs))
+    return ({"title": "DeepSeek 严格出题 · %s · %s" % (topic, level),
+             "source": "deepseek", "requested_level": level,
+             "difficulty_guaranteed": True,
+             "infos": [], "questions": qs},
+            "DeepSeek 出题成功（%s / %s）" % (topic, level))
 
 
 def _clean(raw, n, rng, level="中等"):

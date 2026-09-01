@@ -395,6 +395,46 @@ class AIGuardrailTests(unittest.TestCase):
 
 
 class GenerationRaceTests(unittest.TestCase):
+    def test_failed_ai_generation_keeps_current_set_and_never_uses_local(self):
+        room = engine.Room("2468", engine.default_settings())
+        room.settings["generator"] = "ai"
+        current = {"title": "当前 AI 题库", "source": "deepseek",
+                   "infos": ["保留这一套"], "questions": []}
+        room.set = current
+        room.gen = {"status": "running", "msg": "正在出题"}
+        room.generation_rev = 1
+        generation_sig = room.sig()
+
+        with mock.patch.object(
+                room, "_build", side_effect=gen_ai.AIError("模型空返回")):
+            with mock.patch("game.engine.gen_local.generate") as local_generate:
+                room._generate(room.generation_rev, generation_sig)
+
+        self.assertIs(room.set, current)
+        self.assertEqual(room.gen["status"], "error")
+        self.assertIn("模型空返回", room.gen["msg"])
+        self.assertIn("未改用本地题库", room.gen["msg"])
+        local_generate.assert_not_called()
+
+    def test_failed_ai_prefetch_stays_failed_instead_of_banking_local_set(self):
+        room = engine.Room("2468", engine.default_settings())
+        room.settings["generator"] = "ai"
+        room.settings["prefetch_next"] = True
+        room.next_sig = room.sig()
+        room.next_gen = {"status": "running", "msg": "正在预生成"}
+        room.start_after_gen = True
+
+        with mock.patch.object(
+                room, "_build", side_effect=gen_ai.AIError("模型空返回")):
+            with mock.patch("game.engine.gen_local.generate") as local_generate:
+                room._prefetch()
+
+        self.assertIsNone(room.next_set)
+        self.assertFalse(room.start_after_gen)
+        self.assertEqual(room.next_gen["status"], "error")
+        self.assertIn("未改用本地题库", room.next_gen["msg"])
+        local_generate.assert_not_called()
+
     def test_regenerate_replaces_current_set_for_every_game(self):
         """“换一套”始终替换当前待开局题库，不能消费或改写下一套槽位。"""
         game_ids = [
@@ -640,23 +680,40 @@ class TriviaDifficultyTests(unittest.TestCase):
         self.assertTrue(all(q["difficulty"] >= 4
                             for q in game_set["questions"]))
 
-    def test_trivia_fallback_discloses_that_difficulty_is_not_guaranteed(self):
+    def test_trivia_without_ai_key_uses_an_explicit_local_bank(self):
         room = mock.Mock(settings={
             "n_questions": 3,
             "topic": "综合",
             "level": "困难",
-            "api_key": "test-key",
+            "api_key": "",
             "model": "test-model",
         })
 
-        with mock.patch("game.modes.trivia.gen_ai.chat",
-                        side_effect=gen_ai.AIError("offline")):
-            game_set, message = trivia.build(room)
+        game_set, message = trivia.build(room)
 
         self.assertEqual(game_set["source"], "bank")
         self.assertFalse(game_set["difficulty_guaranteed"])
-        self.assertIn("难度降级", game_set["title"])
+        self.assertIn("未启用 AI", game_set["title"])
+        self.assertIn("未配置 DeepSeek", message)
         self.assertIn("未保证「困难」难度", message)
+
+    def test_ai_enabled_games_raise_instead_of_silently_using_local_banks(self):
+        cases = [
+            (trivia, {"n_questions": 3, "topic": "综合", "level": "困难"}),
+            (vote, {"n_questions": 3, "names": SAMPLE_NAMES}),
+            (undercover, {"n_questions": 3}),
+            (draw, {"n_questions": 3}),
+        ]
+
+        for mode, settings in cases:
+            configured = dict(settings, api_key="test-key", model="test-model")
+            room = mock.Mock(settings=configured)
+            with self.subTest(mode=mode.__name__):
+                with mock.patch.object(
+                        mode.gen_ai, "chat",
+                        side_effect=gen_ai.AIError("offline")):
+                    with self.assertRaisesRegex(gen_ai.AIError, "offline"):
+                        mode.build(room)
 
 
 class ConfigurationTests(unittest.TestCase):

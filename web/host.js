@@ -331,7 +331,7 @@
       sourceClass = 'ok';
     } else if (s.set_source) {
       source = s.difficulty_guaranteed === false
-        ? '当前题库：基础兜底 · 难度已降级'
+        ? '当前题库：内置题库 · 未启用 AI / 难度未保证'
         : '当前题库：本地生成';
       sourceClass = s.difficulty_guaranteed === false ? 'warn' : 'ok';
     }
@@ -535,7 +535,8 @@
       (s.played && s.played.length
         ? '<div class="note">今晚已经玩过：' + esc(s.played.join('、')) +
           '　（总分累计中）</div>' : '') +
-      '<div class="note" style="text-align:center" id="genNote">' +
+      '<div class="note' + (s.gen.status === 'error' ? ' warn' : '') +
+      '" style="text-align:center" id="genNote">' +
       (waitingForNext ? '⏳ 新题生成后会自动开始' :
         ((busy ? '⏳ ' : '') + esc(s.gen.msg || '还没生成题库') +
          (busy ? '<span id="genSec"></span>' : ''))) +

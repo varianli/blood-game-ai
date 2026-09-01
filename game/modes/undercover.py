@@ -20,29 +20,29 @@ def build(room):
     s = room.settings
     n = int(s.get("n_questions") or 6)
     rng = random.Random()
-    try:
-        content = gen_ai.chat(
-            s.get("api_key"), s.get("model"),
-            [{"role": "user", "content": game_content.render_prompt(PROMPT, n=n)}],
-            timeout=gen_ai.QUALITY_TIMEOUT,
-            max_tokens=gen_ai.GEN_TOKENS, temperature=1.2)
-        obj = gen_ai._loads(content)
-        pairs = []
-        for p in obj.get("pairs") or []:
-            if isinstance(p, list) and len(p) == 2:
-                a, b = str(p[0]).strip(), str(p[1]).strip()
-                if a and b and a != b and len(a) <= 8 and len(b) <= 8:
-                    pairs.append([a, b])
-        if len(pairs) < max(2, n // 2):
-            raise gen_ai.AIError("可用词对太少（%d 组）" % len(pairs))
-        return ({"title": "DeepSeek 出词 · 卧底找茬", "source": "deepseek",
-                 "infos": [], "questions": _wrap(pairs[:n])},
-                "DeepSeek 出词成功")
-    except Exception as e:
+    if not s.get("api_key"):
         pairs = common.pick_n(rng, FALLBACK, n)
-        return ({"title": "内置词库 · 卧底找茬", "source": "bank",
+        return ({"title": "内置词库 · 卧底找茬 · 未启用 AI", "source": "bank",
                  "infos": [], "questions": _wrap(pairs)},
-                "%s —— 已改用内置词库" % e)
+                "未配置 DeepSeek，使用内置词库")
+
+    content = gen_ai.chat(
+        s.get("api_key"), s.get("model"),
+        [{"role": "user", "content": game_content.render_prompt(PROMPT, n=n)}],
+        timeout=gen_ai.QUALITY_TIMEOUT,
+        max_tokens=gen_ai.GEN_TOKENS, temperature=1.2)
+    obj = gen_ai._loads(content)
+    pairs = []
+    for p in obj.get("pairs") or []:
+        if isinstance(p, list) and len(p) == 2:
+            a, b = str(p[0]).strip(), str(p[1]).strip()
+            if a and b and a != b and len(a) <= 8 and len(b) <= 8:
+                pairs.append([a, b])
+    if len(pairs) < max(2, n // 2):
+        raise gen_ai.AIError("可用词对太少（%d 组）" % len(pairs))
+    return ({"title": "DeepSeek 出词 · 卧底找茬", "source": "deepseek",
+             "infos": [], "questions": _wrap(pairs[:n])},
+            "DeepSeek 出词成功")
 
 
 def _wrap(pairs):

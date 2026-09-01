@@ -24,24 +24,24 @@ def build(room):
     s = room.settings
     n = int(s.get("n_questions") or 8)
     rng = random.Random()
-    try:
-        content = gen_ai.chat(
-            s.get("api_key"), s.get("model"),
-            [{"role": "user", "content": game_content.render_prompt(PROMPT, n=n)}],
-            timeout=gen_ai.QUALITY_TIMEOUT,
-            max_tokens=gen_ai.GEN_TOKENS, temperature=1.2)
-        obj = gen_ai._loads(content)
-        words = [str(w).strip() for w in (obj.get("words") or []) if str(w).strip()]
-        words = [w for w in words if 2 <= len(w) <= 6]
-        if len(words) < max(2, n // 2):
-            raise gen_ai.AIError("可用词太少（%d 个）" % len(words))
-        return ({"title": "DeepSeek 出词 · 你画我猜", "source": "deepseek",
-                 "infos": [], "questions": _wrap(words[:n])},
-                "DeepSeek 出词成功")
-    except Exception as e:
-        return ({"title": "内置词库 · 你画我猜", "source": "bank",
+    if not s.get("api_key"):
+        return ({"title": "内置词库 · 你画我猜 · 未启用 AI", "source": "bank",
                  "infos": [], "questions": _wrap(common.pick_n(rng, FALLBACK, n))},
-                "%s —— 已改用内置词库" % e)
+                "未配置 DeepSeek，使用内置词库")
+
+    content = gen_ai.chat(
+        s.get("api_key"), s.get("model"),
+        [{"role": "user", "content": game_content.render_prompt(PROMPT, n=n)}],
+        timeout=gen_ai.QUALITY_TIMEOUT,
+        max_tokens=gen_ai.GEN_TOKENS, temperature=1.2)
+    obj = gen_ai._loads(content)
+    words = [str(w).strip() for w in (obj.get("words") or []) if str(w).strip()]
+    words = [w for w in words if 2 <= len(w) <= 6]
+    if len(words) < max(2, n // 2):
+        raise gen_ai.AIError("可用词太少（%d 个）" % len(words))
+    return ({"title": "DeepSeek 出词 · 你画我猜", "source": "deepseek",
+             "infos": [], "questions": _wrap(words[:n])},
+            "DeepSeek 出词成功")
 
 
 def _wrap(words):
