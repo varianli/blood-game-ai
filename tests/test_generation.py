@@ -177,6 +177,90 @@ class AIGuardrailTests(unittest.TestCase):
         self.assertEqual(result, '{"questions": []}')
         self.assertEqual(urlopen.call_count, 2)
 
+    def test_quality_first_chat_recovers_from_deepseek_empty_json_content(self):
+        empty = {
+            "choices": [{
+                "message": {"content": "", "reasoning_content": "hidden"},
+                "finish_reason": "stop",
+            }],
+            "usage": {
+                "completion_tokens_details": {"reasoning_tokens": 24680},
+            },
+        }
+        completed = {
+            "choices": [{
+                "message": {"content": '{"questions": []}'},
+                "finish_reason": "stop",
+            }],
+        }
+
+        class FakeResponse(object):
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(self.payload).encode("utf-8")
+
+        responses = [FakeResponse(empty), FakeResponse(completed)]
+        with mock.patch("game.gen_ai.urllib.request.urlopen",
+                        side_effect=responses) as urlopen:
+            result = gen_ai.chat(
+                "test-key", None,
+                [{"role": "user", "content": "生成一套 JSON 题库"}],
+            )
+
+        first_request = json.loads(
+            urlopen.call_args_list[0].args[0].data.decode("utf-8"))
+        recovery_request = json.loads(
+            urlopen.call_args_list[1].args[0].data.decode("utf-8"))
+        self.assertEqual(result, '{"questions": []}')
+        self.assertEqual(urlopen.call_count, 2)
+        self.assertEqual(first_request["response_format"],
+                         {"type": "json_object"})
+        self.assertNotIn("response_format", recovery_request)
+        self.assertEqual(recovery_request["thinking"], {"type": "enabled"})
+        self.assertEqual(recovery_request["reasoning_effort"], "max")
+        self.assertEqual(recovery_request["max_tokens"], 384000)
+        self.assertIn("完整、非空的 JSON",
+                      recovery_request["messages"][-1]["content"])
+
+    def test_quality_first_chat_reports_metadata_after_two_empty_responses(self):
+        empty = {
+            "choices": [{
+                "message": {"content": "", "reasoning_content": "hidden"},
+                "finish_reason": "stop",
+            }],
+            "usage": {
+                "completion_tokens_details": {"reasoning_tokens": 13579},
+            },
+        }
+
+        class FakeResponse(object):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(empty).encode("utf-8")
+
+        with mock.patch("game.gen_ai.urllib.request.urlopen",
+                        side_effect=[FakeResponse(), FakeResponse()]):
+            with self.assertRaisesRegex(
+                    gen_ai.AIError,
+                    "连续两次.*finish_reason=stop.*reasoning_tokens=13579"):
+                gen_ai.chat(
+                    "test-key", None,
+                    [{"role": "user", "content": "生成一套 JSON 题库"}],
+                )
+
     def test_prompt_is_built_from_the_repository_style_guide(self):
         guide = Path(gen_ai.STYLE_GUIDE_PATH).read_text(encoding="utf-8")
         prompt = gen_ai.build_prompt(SAMPLE_NAMES, 30, 15)

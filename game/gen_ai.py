@@ -29,7 +29,7 @@ GEN_TOKENS = MAX_OUTPUT_TOKENS
 POLISH_TOKENS = MAX_OUTPUT_TOKENS
 QUALITY_REASONING_EFFORT = "max"
 QUALITY_TIMEOUT = 900
-TRUNCATION_RETRIES = 1
+RECOVERY_RETRIES = 1
 
 
 class AIError(Exception):
@@ -53,10 +53,24 @@ def chat(api_key, model, messages, timeout=QUALITY_TIMEOUT, json_mode=True,
     if json_mode:
         body["response_format"] = {"type": "json_object"}
 
-    for attempt in range(TRUNCATION_RETRIES + 1):
+    recover_from_empty_json = False
+    for attempt in range(RECOVERY_RETRIES + 1):
+        request_body = dict(body)
+        if recover_from_empty_json:
+            # DeepSeek 官方说明 JSON Output 偶尔会返回空 content。恢复请求
+            # 保留 Pro、max 思考和 384K 空间，只撤掉触发缺陷的 API JSON 模式；
+            # Prompt 仍强制 JSON，返回后还会经过同一套解析与业务校验。
+            request_body.pop("response_format", None)
+            request_body["messages"] = list(messages) + [{
+                "role": "user",
+                "content": (
+                    "请重新完成以上同一任务。必须在 assistant 的 content 正文中"
+                    "直接输出完整、非空的 JSON 对象；不得只进行内部思考，"
+                    "不要使用 Markdown 代码块，也不要添加 JSON 之外的文字。"),
+            }]
         req = urllib.request.Request(
             API_URL,
-            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            data=json.dumps(request_body, ensure_ascii=False).encode("utf-8"),
             headers={"Authorization": "Bearer " + api_key,
                      "Content-Type": "application/json"},
             method="POST")
@@ -90,13 +104,21 @@ def chat(api_key, model, messages, timeout=QUALITY_TIMEOUT, json_mode=True,
         if ch.get("finish_reason") == "length":
             used = ((data.get("usage") or {})
                     .get("completion_tokens_details") or {}).get("reasoning_tokens")
-            if attempt < TRUNCATION_RETRIES:
+            if attempt < RECOVERY_RETRIES:
                 continue
             raise AIError(
-                "模型连续两次用满 %s token，仍未输出完整结果" %
-                (used or max_tokens))
+                "DeepSeek 连续两次未返回完整结果（finish_reason=length，"
+                "reasoning_tokens=%s）" % (used or max_tokens))
         if not (content or "").strip():
-            raise AIError("DeepSeek 返回了空内容")
+            used = ((data.get("usage") or {})
+                    .get("completion_tokens_details") or {}).get("reasoning_tokens")
+            if attempt < RECOVERY_RETRIES:
+                recover_from_empty_json = bool(json_mode)
+                continue
+            raise AIError(
+                "DeepSeek 连续两次返回空内容（finish_reason=%s，"
+                "reasoning_tokens=%s）" %
+                (ch.get("finish_reason") or "unknown", used or "unknown"))
         return content
 
 
