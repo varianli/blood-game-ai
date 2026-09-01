@@ -2,7 +2,7 @@
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   var room = null, pid = null, offset = 0, S = null, lastV = -1;
-  var localChoice = null, localQ = -1;
+  var localChoice = null, localQ = -1, localSetRev = -1;
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -120,6 +120,12 @@
     return Math.max(0, S.deadline - (Date.now() + offset));
   }
 
+  function cornerTimer(id) {
+    return '<div class="ring ring-corner phone-ring" id="' + id +
+      '" role="timer" aria-label="本阶段倒计时">' +
+      '<div class="num" id="' + id + 'n">–</div></div>';
+  }
+
   /* ---------------- 作答 ---------------- */
 
   function choose(i) {
@@ -136,6 +142,12 @@
 
   function render(prev) {
     var s = S, m = $('pMain');
+    if (localSetRev !== s.set_rev) {
+      localSetRev = s.set_rev;
+      localChoice = null;
+      localQ = -1;
+      pad = null;
+    }
     if (s.you) {
       $('pName').textContent = s.you.name;
       $('pScore').textContent = s.you.score;
@@ -156,7 +168,8 @@
       var i = s.info || { i: 0, total: 1, text: '' };
       m.innerHTML = '<div class="label" style="text-align:center">信息 ' +
         i.i + ' / ' + i.total + '</div>' +
-        '<div class="pinfo">' + esc(i.text) + '</div>' +
+        '<div class="pinfo timed-card">' + cornerTimer('prg') +
+        esc(i.text) + '</div>' +
         '<div class="note" style="text-align:center">记住 —— 等下要用它算题</div>';
       return;
     }
@@ -180,8 +193,9 @@
         buzz(s.you && s.you.correct ? [40, 60, 40] : 200);
       }
 
-      var head = '<div class="label" style="text-align:center">第 ' + q.no +
-        ' / ' + q.total + ' 题</div><div class="pq">' + esc(q.text) + '</div>';
+      var head = '<div class="phone-question-card timed-card">' + cornerTimer('prg') +
+        '<div class="label">第 ' + q.no + ' / ' + q.total + ' 题</div>' +
+        '<div class="pq">' + esc(q.text) + '</div></div>';
 
       var opts = q.options.map(function (o, k) {
         var cls = 'popt k' + k;
@@ -258,7 +272,8 @@
     if (s.phase === 'assign') {
       m.innerHTML = '<div class="label" style="text-align:center">第 ' +
         (s.round ? s.round.no + ' / ' + s.round.total : '1') + ' 轮</div>' +
-        '<div class="pinfo">你拿到的词是<br><b style="font-size:1.5em;color:var(--gold)">' +
+        '<div class="pinfo timed-card">' + cornerTimer('prg') +
+        '你拿到的词是<br><b style="font-size:1.5em;color:var(--gold)">' +
         esc(you.word || '…') + '</b></div>' +
         '<div class="note" style="text-align:center">' +
         '别给别人看。等下轮流描述它，但不能直接说出来。<br>' +
@@ -266,7 +281,8 @@
       return true;
     }
     if (s.phase === 'describe') {
-      m.innerHTML = '<div class="pinfo" style="font-size:1.1em">你的词：<b style="color:var(--gold)">' +
+      m.innerHTML = '<div class="pinfo timed-card" style="font-size:1.1em">' +
+        cornerTimer('prg') + '你的词：<b style="color:var(--gold)">' +
         esc(you.word || '') + '</b></div>' +
         '<div class="note" style="text-align:center">' +
         '按座位顺序，每人用一句话描述自己的词。<br>说得太准会被卧底抄，说得太含糊会被当成卧底。</div>';
@@ -275,7 +291,9 @@
 
     if (s.phase === 'question' && s.candidates) {
       var mine = you.target;
-      m.innerHTML = '<div class="pq">' + esc(s.q ? s.q.text : '投票') + '</div>' +
+      m.innerHTML = '<div class="phone-question-card timed-card">' +
+        cornerTimer('prg') + '<div class="pq">' +
+        esc(s.q ? s.q.text : '投票') + '</div></div>' +
         '<div class="votegrid">' + s.candidates.map(function (c) {
           var me = (you.pid === c.pid);
           return '<button class="vopt' + (mine === c.pid ? ' mine' : '') +
@@ -332,27 +350,30 @@
   function renderDraw(m, s, prev) {
     var d = s.draw, you = s.you || {};
     if (!d) return false;
+    var drawKey = s.set_rev + ':' + d.no;
 
     if (s.phase === 'question' && you.is_drawer) {
-      if (!pad || pad.round !== d.no) {
-        m.innerHTML = '<div class="label" style="text-align:center">该你画了 · 第 ' +
+      if (!pad || pad.key !== drawKey) {
+        m.innerHTML = '<div class="phone-question-card timed-card">' +
+          cornerTimer('prg') + '<div class="label">该你画了 · 第 ' +
           d.no + ' / ' + d.total + ' 幅</div>' +
-          '<div class="drawword">' + esc(d.word || '') + '</div>' +
+          '<div class="drawword">' + esc(d.word || '') + '</div></div>' +
           '<canvas id="cv" class="cv"></canvas>' +
           '<div style="display:flex;gap:10px">' +
           '<button class="btn ghost" id="undo" style="flex:1">撤一笔</button>' +
           '<button class="btn ghost" id="clr" style="flex:1">全清</button></div>' +
           '<div id="gfeed" class="gfeed"></div>';
-        setupPad(d.no);
+        setupPad(drawKey);
       }
       renderFeed(d);
       return true;
     }
 
     if (s.phase === 'question') {
-      m.innerHTML = '<div class="label" style="text-align:center">' +
-        esc(d.drawer_name) + ' 正在画 · 第 ' + d.no + ' / ' + d.total + ' 幅</div>' +
-        '<div class="note" style="text-align:center">看大屏，想到什么直接打上去</div>' +
+      m.innerHTML = '<div class="phone-question-card timed-card">' +
+        cornerTimer('prg') + '<div class="label">' + esc(d.drawer_name) +
+        ' 正在画 · 第 ' + d.no + ' / ' + d.total + ' 幅</div>' +
+        '<div class="note" style="margin-top:7px">看大屏，想到什么直接打上去</div></div>' +
         '<div id="gfeed" class="gfeed"></div>' +
         '<div style="display:flex;gap:8px">' +
         '<input class="field" id="gin" maxlength="20" placeholder="猜什么？" autocomplete="off">' +
@@ -405,7 +426,7 @@
     });
   }
 
-  function setupPad(round) {
+  function setupPad(drawKey) {
     var cv = $('cv');
     if (!cv) return;
     var rect = cv.getBoundingClientRect();
@@ -416,7 +437,7 @@
     ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     ctx.strokeStyle = '#111'; ctx.lineWidth = 6;
-    pad = { round: round, ctx: ctx, cv: cv, pts: [], all: [] };
+    pad = { key: drawKey, ctx: ctx, cv: cv, pts: [], all: [] };
 
     function xy(e) {
       var r = cv.getBoundingClientRect();
@@ -478,10 +499,22 @@
 
   setInterval(function () {
     if (!S) return;
-    var ms = remain(), bar = $('pBar');
-    if (ms === null || !S.phase_sec) { bar.style.width = '0%'; return; }
+    var ms = remain(), bar = $('pBar'), timer = $('prg'), timerNum = $('prgn');
+    if (ms === null || !S.phase_sec) {
+      bar.style.width = '0%';
+      if (timer) timer.style.setProperty('--timer-progress', '0%');
+      if (timerNum) timerNum.textContent = S.paused ? '⏸' : '–';
+      return;
+    }
     var frac = Math.max(0, Math.min(1, ms / (S.phase_sec * 1000)));
+    var sec = Math.ceil(ms / 1000);
     bar.style.width = (frac * 100) + '%';
     bar.style.background = (S.phase === 'question' && ms < 5000) ? '#e01e37' : '#f2c14e';
+    if (timer) {
+      timer.style.setProperty('--timer-progress', Math.min(99, frac * 100) + '%');
+      timer.classList.toggle('urgent', sec <= 5);
+      timer.setAttribute('aria-label', '剩余 ' + sec + ' 秒');
+    }
+    if (timerNum) timerNum.textContent = sec;
   }, 100);
 })();

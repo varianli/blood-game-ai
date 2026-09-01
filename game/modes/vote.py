@@ -8,41 +8,11 @@
 import random
 import time
 
-from .. import gen_ai
+from .. import content as game_content, gen_ai
 from . import common
 
-PROMPT = """出 {n} 句聚会玩的「谁最可能……」投票题，参加的人是：{names}。
-
-要求：
-- 每句都以「谁最可能」开头，一句话，口语化，读出来好笑。
-- 都是善意的调侃，不要涉及外貌、身材、收入、感情状况，也不要人身攻击。
-- 场景要杂：日常习惯、社死瞬间、旅行、职场、吃喝、突发状况都来一点。
-- 不要在题目里点任何人的名字。
-
-只输出 JSON：{{"prompts":["谁最可能……","谁最可能……"]}}"""
-
-FALLBACK = [
-    "谁最可能睡过头把闹钟按掉继续睡？",
-    "谁最可能把手机忘在出租车上？",
-    "谁最可能在群里发错消息然后火速撤回？",
-    "谁最可能点了外卖又忘了拿？",
-    "谁最可能在电梯里跟陌生人尬聊？",
-    "谁最可能半夜爬起来吃泡面？",
-    "谁最可能把「已读不回」坚持一整天？",
-    "谁最可能旅游前一晚才开始收拾行李？",
-    "谁最可能在 KTV 抢麦不放？",
-    "谁最可能因为剧太好看熬到天亮？",
-    "谁最可能记不住昨天午饭吃了什么？",
-    "谁最可能在超市买一堆用不上的东西？",
-    "谁最可能开会时偷偷刷手机？",
-    "谁最可能把「明天开始减肥」说一整年？",
-    "谁最可能走路看手机撞到玻璃门？",
-    "谁最可能忘记today是自己的纪念日？",
-    "谁最可能在朋友圈发九宫格美食？",
-    "谁最可能被推销电话聊上十分钟？",
-    "谁最可能考试前一晚才开始复习？",
-    "谁最可能把「我马上到」说完还在家？",
-]
+PROMPT = game_content.load_prompt("mostlikely")
+FALLBACK = game_content.load_bank("mostlikely")["prompts"]
 
 
 def build(room):
@@ -51,25 +21,27 @@ def build(room):
     names = s.get("names") or []
     rng = random.Random()
 
-    try:
-        content = gen_ai.chat(
-            s.get("api_key"), s.get("model"),
-            [{"role": "user",
-              "content": PROMPT.format(n=n, names="、".join(names) or "一群朋友")}],
-            timeout=300, max_tokens=gen_ai.GEN_TOKENS, temperature=1.2)
-        obj = gen_ai._loads(content)
-        raw = [str(x).strip() for x in (obj.get("prompts") or []) if str(x).strip()]
-        raw = [x for x in raw if len(x) <= 40]
-        if len(raw) < max(3, n // 2):
-            raise gen_ai.AIError("可用题目太少（%d 句）" % len(raw))
-        qs = _wrap(raw[:n])
-        return ({"title": "DeepSeek 出题 · 谁最可能", "source": "deepseek",
-                 "infos": [], "questions": qs}, "DeepSeek 出题成功")
-    except Exception as e:
+    if not s.get("api_key"):
         qs = _wrap(common.pick_n(rng, FALLBACK, n))
-        return ({"title": "内置题库 · 谁最可能", "source": "bank",
+        return ({"title": "内置题库 · 谁最可能 · 未启用 AI", "source": "bank",
                  "infos": [], "questions": qs},
-                "%s —— 已改用内置题库" % e)
+                "未配置 DeepSeek，使用内置题库")
+
+    content = gen_ai.chat(
+        s.get("api_key"), s.get("model"),
+        [{"role": "user",
+          "content": game_content.render_prompt(
+              PROMPT, n=n, names="、".join(names) or "一群朋友")}],
+        timeout=gen_ai.QUALITY_TIMEOUT,
+        max_tokens=gen_ai.GEN_TOKENS, temperature=1.2)
+    obj = gen_ai._loads(content)
+    raw = [str(x).strip() for x in (obj.get("prompts") or []) if str(x).strip()]
+    raw = [x for x in raw if len(x) <= 40]
+    if len(raw) < max(3, n // 2):
+        raise gen_ai.AIError("可用题目太少（%d 句）" % len(raw))
+    qs = _wrap(raw[:n])
+    return ({"title": "DeepSeek 出题 · 谁最可能", "source": "deepseek",
+             "infos": [], "questions": qs}, "DeepSeek 出题成功")
 
 
 def _wrap(texts):

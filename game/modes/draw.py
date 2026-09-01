@@ -13,48 +13,35 @@
 import random
 import time
 
-from .. import gen_ai
+from .. import content as game_content, gen_ai
 from . import common
 
-PROMPT = """出 {n} 个「你画我猜」用的词，中文。要求：
-
-- 画得出来：具体的东西或者一眼能认出的场景动作，不要抽象概念。
-- 难度中等：不能太简单（苹果、太阳），也不能没法下笔（民主、效率）。
-- 类别铺开：动物、食物、日用品、交通工具、职业、运动、场景都来一点。
-- 每个词 2~5 个字。
-
-只输出 JSON：{{"words":["词","词"]}}"""
-
-FALLBACK = [
-    "长颈鹿", "消防车", "刷牙", "钓鱼", "热气球", "章鱼", "钢琴", "汉堡",
-    "滑雪", "灯塔", "仙人掌", "洗衣机", "熊猫", "披萨", "打篮球", "邮筒",
-    "望远镜", "蜗牛", "生日蛋糕", "潜水艇", "风车", "遛狗", "吸尘器", "彩虹",
-    "帐篷", "企鹅", "理发", "麦克风", "电风扇", "螃蟹", "摩天轮", "拖拉机",
-    "冰淇淋", "跳绳", "路灯", "刺猬", "洗手", "烤串", "直升机", "向日葵",
-]
+PROMPT = game_content.load_prompt("draw")
+FALLBACK = game_content.load_bank("draw")["words"]
 
 
 def build(room):
     s = room.settings
     n = int(s.get("n_questions") or 8)
     rng = random.Random()
-    try:
-        content = gen_ai.chat(
-            s.get("api_key"), s.get("model"),
-            [{"role": "user", "content": PROMPT.format(n=n)}],
-            timeout=300, max_tokens=gen_ai.GEN_TOKENS, temperature=1.2)
-        obj = gen_ai._loads(content)
-        words = [str(w).strip() for w in (obj.get("words") or []) if str(w).strip()]
-        words = [w for w in words if 2 <= len(w) <= 6]
-        if len(words) < max(2, n // 2):
-            raise gen_ai.AIError("可用词太少（%d 个）" % len(words))
-        return ({"title": "DeepSeek 出词 · 你画我猜", "source": "deepseek",
-                 "infos": [], "questions": _wrap(words[:n])},
-                "DeepSeek 出词成功")
-    except Exception as e:
-        return ({"title": "内置词库 · 你画我猜", "source": "bank",
+    if not s.get("api_key"):
+        return ({"title": "内置词库 · 你画我猜 · 未启用 AI", "source": "bank",
                  "infos": [], "questions": _wrap(common.pick_n(rng, FALLBACK, n))},
-                "%s —— 已改用内置词库" % e)
+                "未配置 DeepSeek，使用内置词库")
+
+    content = gen_ai.chat(
+        s.get("api_key"), s.get("model"),
+        [{"role": "user", "content": game_content.render_prompt(PROMPT, n=n)}],
+        timeout=gen_ai.QUALITY_TIMEOUT,
+        max_tokens=gen_ai.GEN_TOKENS, temperature=1.2)
+    obj = gen_ai._loads(content)
+    words = [str(w).strip() for w in (obj.get("words") or []) if str(w).strip()]
+    words = [w for w in words if 2 <= len(w) <= 6]
+    if len(words) < max(2, n // 2):
+        raise gen_ai.AIError("可用词太少（%d 个）" % len(words))
+    return ({"title": "DeepSeek 出词 · 你画我猜", "source": "deepseek",
+             "infos": [], "questions": _wrap(words[:n])},
+            "DeepSeek 出词成功")
 
 
 def _wrap(words):

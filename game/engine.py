@@ -8,16 +8,14 @@
 """
 
 import json
-import os
 import random
 import threading
 import time
 import uuid
 
-from . import arrange, catalog, gen_ai, gen_local, modes
+from . import arrange, catalog, content, gen_ai, gen_local, modes
 
-BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_SET_PATH = os.path.join(BASE, "data", "default_set.json")
+DEFAULT_SET_PATH = str(content.content_path("memory", "default_set.json"))
 
 DEFAULT_NAMES = ["林岚", "周澈", "陈星", "苏禾", "顾言", "唐悦"]
 
@@ -87,6 +85,9 @@ class Room(object):
         self.order = []            # 加入顺序
         self.settings = settings
         self.set = None
+        # 每次替换当前题库都会递增。客户端不能只看“第 1 题”，否则新题库的
+        # 第 1 题会继承上一套第 1 题的本地选择或画板。
+        self.set_rev = 0
         self.phase = "lobby"
         self.deadline = None
         self.phase_sec = 0
@@ -96,6 +97,7 @@ class Room(object):
         self.q_i = 0
         self.gen = {"status": "idle", "msg": ""}
         self.start_after_gen = False
+        self.generation_rev = 0
         self.created = now_ms()
         self.game = "classic"           # 首页选的玩法
         self.game_name = ""
@@ -142,8 +144,10 @@ class Room(object):
     def sig(self):
         """出题相关的设置指纹 —— 改了名单/模式，预生成的那套就作废。"""
         s = self.settings
-        return (tuple(s.get("names") or ()), s.get("generator"),
-                s.get("n_infos"), s.get("n_questions"), s.get("model"))
+        return (self.game, tuple(s.get("names") or ()), s.get("generator"),
+                s.get("n_infos"), s.get("n_questions"), s.get("model"),
+                s.get("topic"), s.get("level"),
+                hash(s.get("api_key") or ""))
 
     def _build(self):
         """按当前设置造一套题，失败直接抛出去。"""
@@ -169,11 +173,12 @@ class Room(object):
                 gs.get("polish_kept", 0), len(gs["infos"]))
         gs = gen_local.generate(names, s["n_infos"], s["n_questions"],
                                 seed=random.randrange(1 << 30))
-        return gs, "本地随机生成"
+        return gs, "本地综艺风格生成"
 
     def _apply(self, gs, msg, status="ok", start=False):
         """装上新题库并清零本局分数。调用前必须持有锁。"""
         self.set = gs
+        self.set_rev += 1
         self.gen = {"status": status, "msg": msg}
         for p in self.players.values():
             p.reset_round()
@@ -186,6 +191,35 @@ class Room(object):
         else:
             self.touch()
 
+    def _clear_next(self):
+        """清空预生成槽位。调用前必须持有锁。"""
+        self.next_set = None
+        self.next_msg = ""
+        self.next_sig = None
+        self.next_gen = {"status": "idle", "msg": ""}
+
+    def _take_next(self):
+        """取出与当前设置匹配的下一套；过期内容直接丢弃。"""
+        if self.next_set is None:
+            return None
+        if self.next_sig != self.sig():
+            self._clear_next()
+            return None
+        prepared = self.next_set, self.next_msg
+        self._clear_next()
+        return prepared
+
+    def _finish_prefetch(self, gs, msg, ready_msg="下一套题已就绪"):
+        """保存后台题库；若主持人正在等待，则直接装载并自动开局。"""
+        if self.start_after_gen:
+            self.start_after_gen = False
+            self._clear_next()
+            self._apply(gs, msg + "（后台准备完成）", start=True)
+            return True
+        self.next_set, self.next_msg = gs, msg
+        self.next_gen = {"status": "ok", "msg": ready_msg}
+        return False
+
     def begin_play(self):
         """开局 —— 各玩法第一个阶段不一样。"""
         m = modes.get(self.kind)
@@ -194,45 +228,61 @@ class Room(object):
         else:
             self.set_phase("briefing", self.settings["info_sec"])
 
-    def generate_async(self, start_after=False):
+    def generate_async(self, start_after=False, force_fresh=False):
         with self.lock:
             if self.gen["status"] == "running":
                 return
-            # 上一局玩的时候已经悄悄出好下一套了，直接拿来用，不用等
-            if self.next_set is not None and self.next_sig == self.sig():
-                gs, msg = self.next_set, self.next_msg
-                self.next_set, self.next_msg = None, ""
-                self.next_gen = {"status": "idle", "msg": ""}
+            # “开始下一局”可以接管后台缓存；“换一套题”必须重新生成并替换
+            # 当前待开局题库，两个意图不能再共用同一条含糊路径。
+            prepared = None if force_fresh else self._take_next()
+            if prepared:
+                gs, msg = prepared
                 self._apply(gs, msg + "（提前出好的，秒开）", start=start_after)
                 bump()
-                self.prefetch_async()
                 return
+            if force_fresh:
+                self.start_after_gen = False
+                self._clear_next()
             self.gen = {"status": "running", "msg": "正在出题…",
                         "since": now_ms()}
             self.start_after_gen = start_after
+            self.generation_rev += 1
+            generation_rev = self.generation_rev
+            generation_sig = self.sig()
             self.touch()
         bump()
-        threading.Thread(target=self._generate, daemon=True).start()
+        threading.Thread(target=self._generate,
+                         args=(generation_rev, generation_sig),
+                         daemon=True).start()
 
-    def _generate(self):
-        s = self.settings
-        names = s["names"] or DEFAULT_NAMES
+    def _generate(self, generation_rev, generation_sig):
         try:
             gs, msg = self._build()
-            status = "ok"
         except Exception as e:
-            try:
-                gs = gen_local.generate(names, s["n_infos"], s["n_questions"],
-                                        seed=random.randrange(1 << 30))
-            except Exception:
-                gs = load_default_set()
-            status = "fallback"
-            msg = "%s —— 已自动改用本地题库" % e
+            with self.lock:
+                if (generation_rev != self.generation_rev or
+                        generation_sig != self.sig()):
+                    return
+                self.start_after_gen = False
+                self.gen = {
+                    "status": "error",
+                    "msg": ("❌ 出题失败：%s。未改用本地题库；请重试，"
+                            "或由你主动选择本地出题。" % e),
+                }
+                # 保留当前已经确认过的题库；失败的请求不能偷偷替换它。
+                self.touch()
+            bump()
+            return
 
         with self.lock:
+            # 出题期间可能已经切换玩法或修改了出题设置。旧线程即使后来
+            # 成功，也不能覆盖新玩法正在使用的题库与生成状态。
+            if (generation_rev != self.generation_rev or
+                    generation_sig != self.sig()):
+                return
             start = self.start_after_gen
             self.start_after_gen = False
-            self._apply(gs, msg, status=status, start=start)
+            self._apply(gs, msg, status="ok", start=start)
         bump()
 
     # ---------------- 预生成下一套 ----------------
@@ -240,8 +290,9 @@ class Room(object):
     def prefetch_async(self):
         """开局后在后台把下一套题先出好，这样「再来一局」不用干等 DeepSeek。"""
         with self.lock:
-            if self.settings.get("generator") not in ("ai", "polish"):
-                return                      # 本地出题本来就是瞬间的
+            if (self.kind != catalog.DEDUCE or
+                    not self.settings.get("prefetch_next", True)):
+                return
             if self.next_gen.get("status") == "running" or self.next_set:
                 return
             self.next_gen = {"status": "running", "msg": "正在预生成下一套…",
@@ -253,37 +304,34 @@ class Room(object):
 
     def _prefetch(self):
         sig = self.next_sig
+        started = False
         try:
             gs, msg = self._build()
             with self.lock:
-                if sig != self.sig():        # 中途改了设置，这套作废
-                    self.next_gen = {"status": "idle", "msg": ""}
+                if (sig != self.sig() or     # 中途改了设置/关闭开关，这套作废
+                        not self.settings.get("prefetch_next", True)):
+                    self._clear_next()
                 else:
-                    self.next_set, self.next_msg = gs, msg
-                    self.next_gen = {"status": "ok", "msg": "下一套题已就绪"}
+                    started = self._finish_prefetch(gs, msg)
         except Exception as e:
-            # DeepSeek 出岔子也不能让下一局干等 —— 退而求其次存一套本地的，
-            # 保证「再来一局」永远是秒开
-            try:
-                s = self.settings
-                gs = gen_local.generate(s["names"] or DEFAULT_NAMES,
-                                        s["n_infos"], s["n_questions"],
-                                        seed=random.randrange(1 << 30))
-                with self.lock:
-                    if sig == self.sig():
-                        self.next_set = gs
-                        self.next_msg = "本地随机生成"
-                        self.next_gen = {
-                            "status": "ok",
-                            "msg": "下一套题已就绪（DeepSeek 预生成失败：%s，"
-                                   "改用了本地题库）" % e}
-                    else:
-                        self.next_gen = {"status": "idle", "msg": ""}
-            except Exception:
-                with self.lock:
-                    self.next_gen = {"status": "error",
-                                     "msg": "预生成失败：%s" % e}
+            with self.lock:
+                if (sig != self.sig() or
+                        not self.settings.get("prefetch_next", True)):
+                    self._clear_next()
+                else:
+                    self.start_after_gen = False
+                    self.next_set = None
+                    self.next_msg = ""
+                    self.next_gen = {
+                        "status": "error",
+                        "msg": ("DeepSeek 预生成失败：%s。未改用本地题库；"
+                                "下次开始时会重新尝试。" % e),
+                    }
+                    self.touch()
         bump()
+        # B 已经自动开局后，继续在后台准备 C，下一局仍然不用等。
+        if started:
+            self.prefetch_async()
 
     # ---------------- 主持人操作 ----------------
 
@@ -293,8 +341,28 @@ class Room(object):
             if action == "generate":
                 self.generate_async(False)
                 return
+            if action == "regenerate":
+                self.generate_async(False, force_fresh=True)
+                return
             if action == "start":
                 if self.gen["status"] == "running":
+                    return
+                # 从结算页回大厅后直接点「开始游戏」，也必须自动接管后台准备好的
+                # 下一套；不能继续启动上一局的 self.set。
+                prepared = self._take_next()
+                if prepared:
+                    gs, msg = prepared
+                    self._apply(gs, msg + "（提前出好的，秒开）")
+                elif self.banked:
+                    if (self.next_gen.get("status") == "running" and
+                            self.next_sig == self.sig()):
+                        self.start_after_gen = True
+                        self.next_gen["msg"] = "正在完成下一套，完成后自动开始…"
+                        self.touch()
+                        # 旧题已经结算，等后台的新题，绝不再次启动旧题。
+                        return bump()
+                    # 没有可接管的后台题库时，先生成一套全新的再自动开局。
+                    self.generate_async(True)
                     return
                 if not self.set:
                     self.generate_async(True)
@@ -305,8 +373,9 @@ class Room(object):
                     p.reset_round()
                 self.banked = False
                 self.begin_play()
-                # 这一局开打了，后台把下一套先出好
-                threading.Thread(target=self.prefetch_async, daemon=True).start()
+                # 这一局开打了；主持人勾选后，后台把下一套先出好
+                if self.settings.get("prefetch_next", True):
+                    self.prefetch_async()
             elif action == "skip":
                 # 大厅里「跳过」什么都不做，否则会把刚退出来的游戏又拉起来
                 if self.phase != "lobby":
@@ -330,6 +399,7 @@ class Room(object):
             elif action == "lobby":
                 self.set_phase("lobby")
             elif action == "settings":
+                old_sig = self.sig()
                 for k in ("info_sec", "question_sec", "reveal_sec", "board_sec",
                           "describe_sec"):
                     if k in payload:
@@ -337,24 +407,42 @@ class Room(object):
                 for k in ("topic", "level"):
                     if payload.get(k):
                         self.settings[k] = str(payload[k])[:20]
-                if "names" in payload:
-                    self.settings["names"] = [
-                        str(x).strip() for x in payload["names"] if str(x).strip()]
+                if "names" in payload and isinstance(payload["names"], (list, tuple)):
+                    names = []
+                    for value in payload["names"][:20]:
+                        name = str(value).strip()[:12]
+                        if name:
+                            names.append(name)
+                    if names:
+                        self.settings["names"] = names
                 for k in ("n_infos", "n_questions"):
                     if k in payload:
                         self.settings[k] = max(3, min(80, int(payload[k])))
-                if "generator" in payload:
+                if payload.get("generator") in ("local", "polish", "ai", "default"):
                     self.settings["generator"] = payload["generator"]
                 if "auto" in payload:
                     self.settings["auto"] = bool(payload["auto"])
+                if "prefetch_next" in payload:
+                    self.settings["prefetch_next"] = bool(payload["prefetch_next"])
+                    if not self.settings["prefetch_next"]:
+                        self.start_after_gen = False
+                        self._clear_next()
                 if payload.get("api_key"):
-                    self.settings["api_key"] = str(payload["api_key"]).strip()
+                    self.settings["api_key"] = str(payload["api_key"]).strip()[:512]
                 if payload.get("model"):
-                    self.settings["model"] = str(payload["model"]).strip()
+                    self.settings["model"] = str(payload["model"]).strip()[:100]
+                if self.sig() != old_sig:
+                    self.generation_rev += 1
+                    self.start_after_gen = False
+                    self._clear_next()
+                    if self.gen.get("status") == "running":
+                        self.gen = {"status": "idle", "msg": ""}
                 self.touch()
             elif action == "switch_game":
                 gid = str(payload.get("game") or "")
                 if gid in catalog.BY_ID:
+                    self.generation_rev += 1
+                    self.start_after_gen = False
                     # 换游戏但留住玩家和总分：先把没结算的本局分收进总分
                     if not self.banked and self.set:
                         for p in self.players.values():
@@ -366,8 +454,8 @@ class Room(object):
                     self.game_name = catalog.name_of(gid)
                     self.settings.update(catalog.preset_of(gid))
                     self.set = None
-                    self.next_set = None
-                    self.next_gen = {"status": "idle", "msg": ""}
+                    self.set_rev += 1
+                    self._clear_next()
                     self.gen = {"status": "idle", "msg": ""}
                     for p in self.players.values():
                         p.reset_round()
@@ -610,6 +698,10 @@ class Room(object):
                 "gen": self.gen,
                 "next_gen": self.next_gen,
                 "next_ready": self.next_set is not None,
+                "set_rev": self.set_rev,
+                "start_pending": bool(
+                    self.start_after_gen and
+                    self.next_gen.get("status") == "running"),
                 "board": board,
                 "total_board": total_board,
                 "played": self.played,
@@ -617,11 +709,14 @@ class Room(object):
                 "settings": {k: s[k] for k in
                              ("info_sec", "question_sec", "reveal_sec",
                               "board_sec", "n_infos", "n_questions",
-                              "generator", "auto", "names", "model",
+                              "generator", "auto", "prefetch_next", "names", "model",
                              "describe_sec", "topic", "level")
                              if k in s},
                 "has_set": bool(self.set),
                 "set_title": (self.set or {}).get("title", ""),
+                "set_source": (self.set or {}).get("source", ""),
+                "difficulty_guaranteed":
+                    (self.set or {}).get("difficulty_guaranteed"),
                 "n_info_total": len((self.set or {}).get("infos", [])),
                 "n_q_total": len((self.set or {}).get("questions", [])),
             }
@@ -670,7 +765,7 @@ class Room(object):
 def default_settings(api_key="", model=gen_ai.DEFAULT_MODEL):
     return {"info_sec": 8, "question_sec": 20, "reveal_sec": 6, "board_sec": 6,
             "n_infos": 30, "n_questions": 15, "generator": "local",
-            "auto": True, "names": list(DEFAULT_NAMES),
+            "auto": True, "prefetch_next": True, "names": list(DEFAULT_NAMES),
             "api_key": api_key, "model": model}
 
 

@@ -2,7 +2,7 @@
 """本地题库生成器。
 
 每局随机抽取人物设定与数值，再由代码算出正确答案 —— 所以数学一定是对的。
-输出格式与 data/default_set.json 完全一致：
+输出格式与 games/memory/default_set.json 完全一致：
     {"infos": [30 条信息], "questions": [15 道题]}
 每道题：{"text", "options"(4), "answer"(索引), "explain", "uses"(用到第几条信息)}
 """
@@ -960,6 +960,91 @@ def identity_questions(rng, people):
                                     [k for k, _ in p["facts"]].index(key)][1],
                                 uses=[p["idx"][key]])
                 out.append(mk3)
+    for key, label, suffix, fallback in (
+            ("month", "是几月出生的", " 月", range(1, 13)),
+            ("lucky", "的幸运数字是多少", "", range(1, 10))):
+        for p in people:
+            if key in p["idx"]:
+                def mk4(p=p, key=key, label=label, suffix=suffix,
+                        fallback=fallback):
+                    correct = "%d%s" % (p[key], suffix)
+                    others = ["%d%s" % (q[key], suffix)
+                              for q in people if q is not p]
+                    opts, ai = build_choice(
+                        rng, correct,
+                        others + ["%d%s" % (value, suffix) for value in fallback])
+                    return dict(
+                        text="%s%s？" % (p["name"], label),
+                        options=opts, answer=ai,
+                        explain="信息里写着：%s" % p["facts"][
+                            [k for k, _ in p["facts"]].index(key)][1],
+                        uses=[p["idx"][key]])
+                out.append(mk4)
+    return out
+
+
+def _fact_detail(p, key):
+    """去掉人名，得到可放进反向匹配题里的短线索。"""
+    for fact_key, text in p["facts"]:
+        if fact_key == key:
+            return text.replace(p["name"], "", 1).strip(" 。")
+    return ""
+
+
+def fun_questions(rng, people):
+    """不靠四则运算的反向匹配和双线索关联题。"""
+    out = []
+    all_details = {}
+    for p in people:
+        for key in p["idx"]:
+            detail = _fact_detail(p, key)
+            if detail:
+                all_details.setdefault(detail, []).append(p["name"])
+
+    for p in people:
+        keys = list(p["idx"])
+        # 双线索尽量跨题材：不是比收入，而是从两个记忆钩子锁定人物。
+        pairs = []
+        for i, first in enumerate(keys):
+            for second in keys[i + 1:]:
+                score = 1 if fact_topic(first) != fact_topic(second) else 0
+                pairs.append((score, rng.random(), first, second))
+        if pairs:
+            _, _, first, second = max(pairs)
+            first_detail = _fact_detail(p, first)
+            second_detail = _fact_detail(p, second)
+            wrong_names = [q["name"] for q in people if q is not p]
+            rng.shuffle(wrong_names)
+            options, answer = build_choice(rng, p["name"], wrong_names)
+            out.append({
+                "text": "同时符合「%s」和「%s」的是谁？"
+                        % (first_detail, second_detail),
+                "options": options,
+                "answer": answer,
+                "explain": "%s的两条信息分别是：%s；%s。"
+                           % (p["name"], first_detail, second_detail),
+                "uses": sorted([p["idx"][first], p["idx"][second]]),
+                "type": "logic",
+            })
+
+        # 把「人物 → 属性」倒过来问，改变回忆方向，避免整场都是同一种题干。
+        candidates = [key for key in keys
+                      if len(all_details.get(_fact_detail(p, key), [])) == 1]
+        if candidates:
+            candidates.sort(key=lambda key: fact_topic(key) == "价格数量")
+            key = candidates[0]
+            detail = _fact_detail(p, key)
+            wrong_names = [q["name"] for q in people if q is not p]
+            rng.shuffle(wrong_names)
+            options, answer = build_choice(rng, p["name"], wrong_names)
+            out.append({
+                "text": "谁的信息里出现了「%s」？" % detail,
+                "options": options,
+                "answer": answer,
+                "explain": "这条信息属于%s。" % p["name"],
+                "uses": [p["idx"][key]],
+                "type": "transform",
+            })
     return out
 
 
@@ -967,8 +1052,186 @@ def identity_questions(rng, people):
 # 主入口
 # --------------------------------------------------------------------------
 
+
+def standalone_cards(rng):
+    """生成节目式独立卡片；它们不是任何人物的简历字段。"""
+    cards = []
+
+    def others(correct, pool):
+        return [value for value in pool if value != correct]
+
+    def add(text, topic, family, question, correct, wrongs,
+            qtype="recall", explain=None):
+        options, answer = build_choice(rng, str(correct),
+                                       [str(value) for value in wrongs])
+        cards.append({
+            "text": text,
+            "topic": topic,
+            "family": family,
+            "question": {
+                "text": question,
+                "options": options,
+                "answer": answer,
+                "explain": explain or "信息卡中直接给出了答案。",
+                "uses": [],
+                "type": qtype,
+            },
+        })
+
+    colors = rng.sample(COLORS, min(5, len(COLORS)))
+    shapes = ["三角形", "圆形", "正方形", "菱形", "星形"]
+    shape = rng.choice(shapes)
+    add("%s%s。" % (colors[0], shape), "物品视觉", "颜色图形",
+        "与%s配对的图形是什么？" % colors[0], shape,
+        others(shape, shapes), "recall")
+
+    color_number = rng.randint(1, 9)
+    add("%s色数字 %d。" % (colors[1], color_number),
+        "物品视觉", "颜色数字",
+        "%s色对应的数字是多少？" % colors[1], color_number,
+        others(color_number, range(1, 10)), "recall")
+
+    ranks = ["A", "2", "3", "5", "7", "8", "J", "Q", "K"]
+    shown = rng.sample(ranks, 5)
+    missing = rng.choice([rank for rank in ranks if rank not in shown])
+    add("黑桃牌面：%s。" % "、".join(shown), "物品视觉", "牌面集合",
+        "下列哪张牌没有出现在黑桃牌面中？", missing,
+        rng.sample(shown, 3), "transform",
+        "黑桃列表中没有%s。" % missing)
+
+    digits = rng.sample(list("123456789"), 6)
+    code = "".join(digits)
+    add("短码：%s。" % code, "代码序列", "代码定位",
+        "短码的倒数第二位是什么？", digits[-2],
+        [digits[0], digits[2], digits[-1]], "transform",
+        "短码%s的倒数第二位是%s。" % (code, digits[-2]))
+
+    words = ["攀岩", "陶艺", "观鸟", "拼图", "露营", "魔方"]
+    word = rng.choice(words)
+    add("单独出现的词：%s。" % word, "趣味偏好", "独立词语",
+        "以下哪个词曾单独出现在信息卡上？", word,
+        rng.sample(others(word, words), 3), "transform")
+
+    floor = rng.randint(2, 6)
+    zone = rng.choice(list("ABCD"))
+    spot = rng.randint(10, 39)
+    add("停车位置：地下 %d 层 · %s%d。" % (floor, zone, spot),
+        "代码序列", "停车位置", "停车位位于哪个分区？", zone,
+        others(zone, list("ABCD")), "recall")
+
+    drinks = rng.sample(["柚子茶", "冰拿铁", "青提汁", "热可可", "乌龙茶"], 3)
+    prices = rng.sample([16, 18, 21, 24, 27, 29], 3)
+    menu = "，".join("%s %d 元" % pair for pair in zip(drinks, prices))
+    add("今日菜单：%s。" % menu, "价格数量", "菜单价格",
+        "%s的价格是多少？" % drinks[1], "%d 元" % prices[1],
+        ["%d 元" % value for value in prices if value != prices[1]] +
+        ["%d 元" % (prices[1] + 3)], "recall")
+
+    protein = rng.choice([12, 15, 18, 21, 24])
+    fat = rng.choice([4, 6, 8, 9, 11])
+    add("营养标签：蛋白质 %dg，脂肪 %dg。" % (protein, fat),
+        "价格数量", "营养标签", "营养标签中的蛋白质是多少？",
+        "%dg" % protein,
+        ["%dg" % value for value in (fat, protein + 3, max(1, protein - 4))],
+        "recall")
+
+    scents = ["雪松", "柚子", "海盐", "桂花", "薄荷"]
+    scent = rng.choice(scents)
+    item = rng.choice(["香皂", "香薰蜡烛", "护手霜"])
+    add("%s的气味：%s。" % (item, scent), "趣味偏好", "气味物品",
+        "%s是什么气味？" % item, scent,
+        rng.sample(others(scent, scents), 3), "recall")
+
+    left_at = rng.choice([1, 2, 3])
+    right_at = rng.choice([3, 4, 5])
+    ordinals = ["第一个", "第二个", "第三个", "第四个"]
+    add("路线：第 %d 个路口左转，第 %d 个信号灯右转。" %
+        (left_at, right_at), "地点关系", "路线步骤",
+        "路线要求在第几个路口左转？", ordinals[left_at - 1],
+        others(ordinals[left_at - 1], ordinals), "recall")
+
+    weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六"]
+    weekday = rng.choice(weekdays)
+    month, day = rng.randint(2, 11), rng.randint(3, 24)
+    add("%d 月 %d 日是%s。" % (month, day, weekday),
+        "日期事件", "日期锚点", "%d 月 %d 日是星期几？" % (month, day),
+        weekday, rng.sample(others(weekday, weekdays), 3), "recall")
+
+    row = rng.randint(3, 12)
+    seat = rng.choice(list("ABCD"))
+    add("座位：第 %d 排 %s 座。" % (row, seat), "代码序列", "座位编号",
+        "座位在第几排？", "第 %d 排" % row,
+        ["第 %d 排" % value for value in (row + 1, row + 2, max(1, row - 1))],
+        "recall")
+
+    white, black = rng.randint(2, 4), rng.randint(1, 3)
+    total = white + black
+    add("衣物清单：白色衬衫 %d 件，黑色衬衫 %d 件。" % (white, black),
+        "物品视觉", "衣物清单", "清单里共有多少件衬衫？", "%d 件" % total,
+        ["%d 件" % value for value in (white, black, total + 1)],
+        "calculate", "%d + %d = %d 件。" % (white, black, total))
+
+    gems = rng.sample(["琥珀", "翡翠", "玛瑙", "水晶", "珍珠"], 4)
+    add("宝石顺序：%s。" % " → ".join(gems), "代码序列", "顺序列表",
+        "宝石顺序中的第二项是什么？", gems[1],
+        [gems[0], gems[2], gems[3]], "transform")
+
+    closed = rng.choice(weekdays[:5])
+    add("展馆规则：每周%s闭馆。" % closed, "日期事件", "营业规则",
+        "展馆每周哪一天闭馆？", closed,
+        rng.sample(others(closed, weekdays[:5]), 3), "recall")
+
+    objects = ["折叠伞", "保温杯", "旅行箱", "耳机盒"]
+    obj = rng.choice(objects)
+    obj_color = colors[2]
+    add("物品外观：%s%s。" % (obj_color, obj), "物品视觉", "物品外观",
+        "%s是什么颜色？" % obj, obj_color,
+        rng.sample(others(obj_color, COLORS), 3), "recall")
+
+    rng.shuffle(cards)
+    return cards
+
 ARCHES = ["doctor", "cafe", "coach", "coder", "teacher", "courier",
           "driver", "streamer", "baker", "florist"]
+
+
+def fact_topic(key):
+    """本地题库也带题材标签，供服务端把卡片按综艺节奏重新穿插。"""
+    if key == "job":
+        return "人物身份"
+    if key == "home":
+        return "地点关系"
+    if key in ("pet", "drink", "fear", "food", "park", "season"):
+        return "趣味偏好"
+    if key == "color":
+        return "物品视觉"
+    if key == "month":
+        return "日期事件"
+    if key == "lucky":
+        return "代码序列"
+    return "价格数量"
+
+
+def story_first_facts(facts, person_index):
+    """按题材轮转事实；不同人物从不同题材起步，前 30 张自然形成混合。"""
+    topic_order = ["人物身份", "趣味偏好", "地点关系", "物品视觉",
+                   "日期事件", "代码序列", "价格数量"]
+    shift = person_index % len(topic_order)
+    topic_order = topic_order[shift:] + topic_order[:shift]
+    grouped = {topic: [] for topic in topic_order}
+    for item in facts:
+        grouped.setdefault(fact_topic(item[0]), []).append(item)
+
+    ordered = []
+    while any(grouped.values()):
+        progressed = False
+        for topic in topic_order:
+            if grouped.get(topic):
+                ordered.append(grouped[topic].pop(0))
+                progressed = True
+        if not progressed:
+            break
+    return ordered
 
 
 def generate(names, n_infos=30, n_questions=15, seed=None):
@@ -985,33 +1248,81 @@ def generate(names, n_infos=30, n_questions=15, seed=None):
     people = []
     for i, nm in enumerate(names):
         pool = {"hospital": rng.choice(HOSPITALS), "office": rng.choice(OFFICES)}
-        people.append(make_person(rng, nm, arches[i % len(arches)],
-                                  districts[i % len(districts)], pool))
+        person = make_person(rng, nm, arches[i % len(arches)],
+                             districts[i % len(districts)], pool)
+        person["facts"] = story_first_facts(person["facts"], i)
+        people.append(person)
 
-    # 轮流从每个人身上取事实，直到凑够 n_infos 条
-    infos, meta = [], []
+    # 人物信息只占约三分之二；其余使用颜色、牌面、短码、路线等独立卡片。
+    # 这一步从内容层面改掉「六个人轮流报职业/通勤/收入」的旧题库骨架。
+    solo_pool = standalone_cards(rng)
+    solo_target = min(len(solo_pool), max(1, n_infos // 3))
+    person_target = max(0, n_infos - solo_target)
+    infos, meta, info_topics, info_families = [], [], [], []
+    standalone_questions = []
     for p in people:
         p["idx"] = {}
-    cursor, guard = 0, 0
-    while len(infos) < n_infos and guard < n_infos * 20:
-        guard += 1
-        p = people[cursor % len(people)]
-        cursor += 1
-        k = len(p["idx"])
-        if k >= len(p["facts"]):
-            if all(len(q["idx"]) >= len(q["facts"]) for q in people):
-                break
-            continue
-        key, text = p["facts"][k]
+
+    candidates = []
+    for p in people:
+        for priority, (key, text) in enumerate(p["facts"]):
+            candidates.append({
+                "person": p,
+                "key": key,
+                "text": text,
+                "topic": fact_topic(key),
+                "family": arrange.content_family(text, names),
+                "priority": priority,
+            })
+
+    family_counts, topic_counts, owner_counts = {}, {}, {}
+    while len(infos) < person_target and candidates:
+        allowed = []
+        for candidate in candidates:
+            family = candidate["family"]
+            limit = 1 if family in ("通勤", "出生月份", "幸运数字") else 2
+            if family_counts.get(family, 0) < limit:
+                allowed.append(candidate)
+        if not allowed:
+            # 极小名单或极大信息量时逐步放宽，但依旧优先选未重复家族。
+            allowed = candidates[:]
+        candidate = max(
+            allowed,
+            key=lambda item: (
+                -owner_counts.get(item["person"]["name"], 0) * 110
+                -family_counts.get(item["family"], 0) * 150
+                -topic_counts.get(item["topic"], 0) * 18
+                -item["priority"]
+                +rng.random()
+            ))
+        candidates.remove(candidate)
+        p = candidate["person"]
+        key, text = candidate["key"], candidate["text"]
         infos.append(text)
         p["idx"][key] = len(infos)          # 1-based
         meta.append((p["name"], key))
+        info_topics.append(candidate["topic"])
+        info_families.append(candidate["family"])
+        family_counts[candidate["family"]] = (
+            family_counts.get(candidate["family"], 0) + 1)
+        topic_counts[candidate["topic"]] = (
+            topic_counts.get(candidate["topic"], 0) + 1)
+        owner_counts[p["name"]] = owner_counts.get(p["name"], 0) + 1
+
+    for card in solo_pool[:solo_target]:
+        infos.append(card["text"])
+        meta.append((None, card["family"]))
+        info_topics.append(card["topic"])
+        info_families.append(card["family"])
+        question = dict(card["question"])
+        question["uses"] = [len(infos)]
+        standalone_questions.append(question)
 
     made = []
     seen_text = set()
 
-    def emit(q):
-        if not q:
+    def emit(q, qtype):
+        if not q or len(made) >= n_questions:
             return
         if "_c" in q:
             opts, ai = build_options(rng, q.pop("_c"), q.pop("_w"), q.pop("_f"))
@@ -1019,6 +1330,7 @@ def generate(names, n_infos=30, n_questions=15, seed=None):
         if q["text"] in seen_text:
             return
         seen_text.add(q["text"])
+        q["type"] = qtype
         made.append(q)
 
     person_bs = []
@@ -1030,41 +1342,73 @@ def generate(names, n_infos=30, n_questions=15, seed=None):
 
     cross_bs = cross_questions(rng, people)
     rng.shuffle(cross_bs)
-
-    # 目标：约 2/3 单人题 + 1/3 组合题，组合题优先保证有一定数量
-    n_cross = min(len(cross_bs), max(3, n_questions // 3))
-    for fn in cross_bs[:n_cross]:
-        emit(fn())
+    fun = fun_questions(rng, people)
+    logic = ([q for q in fun if q["type"] == "logic"] +
+             [q for q in standalone_questions if q["type"] == "logic"])
+    transforms = ([q for q in fun if q["type"] == "transform"] +
+                  [q for q in standalone_questions
+                   if q["type"] == "transform"])
+    recalls = [q for q in standalone_questions if q["type"] == "recall"]
+    calculations = [q for q in standalone_questions
+                    if q["type"] == "calculate"]
     for p, needs, fn in person_bs:
-        if len(made) >= n_questions:
-            break
-        emit(fn(p["idx"]))
-    for fn in cross_bs[n_cross:]:
-        if len(made) >= n_questions:
-            break
-        emit(fn())
-    if len(made) < n_questions:
-        idq = identity_questions(rng, people)
-        rng.shuffle(idq)
-        for fn in idq:
-            if len(made) >= n_questions:
-                break
-            emit(fn())
+        question = fn(p["idx"])
+        if question:
+            calculations.append(question)
 
-    rng.shuffle(made)
+    idq = identity_questions(rng, people)
+    for fn in idq:
+        question = fn()
+        if question:
+            recalls.append(question)
+    rng.shuffle(logic)
+    rng.shuffle(transforms)
+    rng.shuffle(recalls)
+    rng.shuffle(calculations)
+
+    # 原版节奏：直接回忆占主干，穿插变换与跨线索推理，纯算术只留少量。
+    logic_target = min(len(logic), max(1, n_questions // 5))
+    transform_target = min(len(transforms), max(2, (n_questions + 3) // 4))
+    calculate_target = min(len(calculations), max(0, n_questions // 8))
+    recall_target = max(
+        0, n_questions - logic_target - transform_target - calculate_target)
+    for q in logic[:logic_target]:
+        emit(q, "logic")
+    for q in transforms[:transform_target]:
+        emit(q, "transform")
+    for q in calculations[:calculate_target]:
+        emit(q, "calculate")
+    for q in recalls[:recall_target]:
+        emit(q, "recall")
+
+    # 人数极少或信息数很小时，优先用非计算题补足。
+    remaining = (recalls[recall_target:] + transforms[transform_target:] +
+                 logic[logic_target:])
+    rng.shuffle(remaining)
+    for q in remaining:
+        if len(made) >= n_questions:
+            break
+        emit(q, q["type"])
+    for fn in cross_bs:
+        if len(made) >= n_questions:
+            break
+        emit(fn(), "logic")
+
     made = made[:n_questions]
-    for i, q in enumerate(made):
-        q["no"] = i + 1
+    made = arrange.interleave_questions(made, rng)
 
-    # 轮流取事实本身就不会连着，但顺序太规律（P1 P2 P3 P1 P2 P3…）容易被摸清，
-    # 这里再随机穿插一次
-    infos = arrange.interleave(infos[:n_infos], made, names, rng)
+    infos, info_topics, info_families = arrange.interleave_topics(
+        infos[:n_infos], made, names, info_topics[:n_infos], rng,
+        owners=[owner for owner, _ in meta[:n_infos]],
+        families=info_families[:n_infos], return_families=True)
 
     return {
-        "title": "随机生成 · %d 人局" % len(names),
+        "title": "本地综艺风格 · %d 人局" % len(names),
         "source": "local",
         "players": names,
         "infos": infos,
+        "info_topics": info_topics,
+        "info_families": info_families,
         "questions": made,
         "cast": [{"name": p["name"], "role": p["role"], "district": p["district"]}
                  for p in people],

@@ -290,6 +290,11 @@ class Server(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
+def startup_url(port):
+    """启动后先进入游戏厅，由主持人选择玩法。"""
+    return "http://localhost:%d/" % port
+
+
 def main():
     load_config()
     port = int(sys.argv[1]) if len(sys.argv) > 1 else int(CONFIG.get("port", 8000))
@@ -312,7 +317,8 @@ def main():
     print(line)
     print("  血之游戏  已启动")
     print(line)
-    print("  主持人（投屏用这个）: http://localhost:%d/host" % port)
+    print("  游戏厅（从这里选玩法）: %s" % startup_url(port))
+    print("  主持人控制台: http://localhost:%d/host" % port)
     for ip in ips:
         print("  玩家（手机扫码/输入）: http://%s:%d/p" % (ip, port))
     print(line)
@@ -325,8 +331,7 @@ def main():
         try:
             import webbrowser
             threading.Timer(
-                0.6, lambda: webbrowser.open(
-                    "http://localhost:%d/host" % port)).start()
+                0.6, lambda: webbrowser.open(startup_url(port))).start()
         except Exception:
             pass
 
