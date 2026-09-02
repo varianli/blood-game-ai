@@ -4,6 +4,8 @@
 三者共用同一套内容规则，只在信息量、题量和时间压力上递进。
 
 - `prompt.md`：DeepSeek 全量生成实际使用的主 Prompt。
+- `review_prompt.md`：独立审阅 Agent 使用的闭卷必要性测试；逐题检查并重写无需
+  记忆、引用虚假、答案不唯一或依据不足的题。
 - `polish_prompt.md`：本地生成后交给 DeepSeek 润色时使用。
 - `style_guide.md`：从节目玩法提炼的题型、题材穿插和重复限制；主 Prompt 会把
   标记区段实际注入模型。

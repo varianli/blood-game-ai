@@ -384,7 +384,7 @@
     var options = [
       ['local', '本地综艺风格生成 · 无需 DeepSeek'],
       ['polish', '本地计算 + DeepSeek 润色'],
-      ['ai', 'DeepSeek 全量生成 · 题材最丰富'],
+      ['ai', 'DeepSeek 双 Agent · 出题后独立审阅'],
       ['default', '内置默认题库']
     ].map(function (option) {
       return '<option value="' + option[0] + '"' +
@@ -409,7 +409,7 @@
       '<label class="frow"><span class="label">题目数量</span>' +
       '<input class="field" id="memoryQuestionCount" type="number" min="3" max="40" value="' +
       esc(memoryDraft.nQuestions) + '"></label></div>' +
-      '<div class="note">选择 DeepSeek 时会使用本房间下方的 AI 设置；新 Prompt 会限制重复句式与纯计算题。</div>' +
+      '<div class="note">选择 DeepSeek 时会使用本房间下方的 AI 设置；出题 Agent 完成后，独立审阅 Agent 会逐题执行闭卷必要性测试。</div>' +
       '<button class="btn" id="saveMemorySettings">保存设置并生成题库</button></div>' +
       '</div></div></details>';
   }
