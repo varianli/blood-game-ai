@@ -1,6 +1,6 @@
 {
   "port": 8000,
   "deepseek_api_key": "",
-  "deepseek_model": "deepseek-v4-pro",
+  "deepseek_model": "deepseek-v4-flash",
   "open_browser": true
 }

@@ -19,11 +19,12 @@ import urllib.request
 from . import arrange, content as game_content
 
 API_URL = "https://api.deepseek.com/chat/completions"
-DEFAULT_MODEL = "deepseek-v4-pro"
+DEFAULT_MODEL = "deepseek-v4-flash"
 
-# 质量优先：V4 Pro + 明确开启思考 + max 推理档。
-# DeepSeek 当前允许的单次最大输出是 384K；思考 token 与最终正文共用这份
-# 预算，因此直接给到模型上限，避免再次出现“思考写完却没空间输出 JSON”。
+# 质量优先：V4 Flash + 明确开启思考 + max 推理档。
+# 不设置低于平台能力的人为预算：DeepSeek 当前允许的单次最大输出是
+# 384K；思考 token 与最终正文共用这份预算，因此请求平台最大值，避免
+# 再次出现“思考写完却没空间输出 JSON”。
 MAX_OUTPUT_TOKENS = 384000
 GEN_TOKENS = MAX_OUTPUT_TOKENS
 POLISH_TOKENS = MAX_OUTPUT_TOKENS

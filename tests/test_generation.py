@@ -101,7 +101,7 @@ class LocalGenerationTests(unittest.TestCase):
 
 
 class AIGuardrailTests(unittest.TestCase):
-    def test_quality_first_chat_uses_pro_max_thinking_and_full_output_budget(self):
+    def test_quality_first_chat_uses_flash_max_thinking_and_full_output_budget(self):
         payload = {
             "choices": [{
                 "message": {"content": '{"ok": true}'},
@@ -129,7 +129,7 @@ class AIGuardrailTests(unittest.TestCase):
         request = urlopen.call_args.args[0]
         body = json.loads(request.data.decode("utf-8"))
         self.assertEqual(result, '{"ok": true}')
-        self.assertEqual(body["model"], "deepseek-v4-pro")
+        self.assertEqual(body["model"], "deepseek-v4-flash")
         self.assertEqual(body["thinking"], {"type": "enabled"})
         self.assertEqual(body["reasoning_effort"], "max")
         self.assertEqual(body["max_tokens"], 384000)
@@ -717,15 +717,16 @@ class TriviaDifficultyTests(unittest.TestCase):
 
 
 class ConfigurationTests(unittest.TestCase):
-    def test_quality_first_model_is_the_default_everywhere(self):
+    def test_flash_with_provider_max_output_is_the_default_everywhere(self):
         host = (Path(__file__).resolve().parents[1] /
                 "web" / "host.html").read_text(encoding="utf-8")
         example = json.loads((Path(__file__).resolve().parents[1] /
                               "config.example.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(gen_ai.DEFAULT_MODEL, "deepseek-v4-pro")
-        self.assertEqual(example["deepseek_model"], "deepseek-v4-pro")
-        self.assertIn('value="deepseek-v4-pro"', host)
+        self.assertEqual(gen_ai.DEFAULT_MODEL, "deepseek-v4-flash")
+        self.assertEqual(gen_ai.MAX_OUTPUT_TOKENS, 384000)
+        self.assertEqual(example["deepseek_model"], "deepseek-v4-flash")
+        self.assertIn('value="deepseek-v4-flash"', host)
 
     def test_environment_overrides_local_config(self):
         with tempfile.TemporaryDirectory() as directory:
