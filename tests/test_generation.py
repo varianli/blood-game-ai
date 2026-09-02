@@ -275,6 +275,113 @@ class AIGuardrailTests(unittest.TestCase):
         self.assertIn('"type"', gen_ai.PROMPT)
         self.assertNotIn("至少一半必须组合 2 条以上", gen_ai.PROMPT)
 
+    def test_reviewer_prompt_uses_closed_book_memory_necessity_test(self):
+        self.assertIn("遮住全部信息卡", gen_ai.REVIEW_PROMPT)
+        self.assertIn("仅凭题干和四个选项", gen_ai.REVIEW_PROMPT)
+        self.assertIn("忽略分隔符", gen_ai.REVIEW_PROMPT)
+        self.assertIn("必须重写", gen_ai.REVIEW_PROMPT)
+
+    def test_generate_ai_uses_an_independent_reviewer_and_its_repaired_question(self):
+        draft = {
+            "infos": [
+                {"text": "短码：4082。", "topic": "代码序列",
+                 "family": "代码定位", "person": "", "template": "短码",
+                 "dependency_group": "q01"},
+            ],
+            "questions": [{
+                "text": "忽略分隔符后，哪组短码第二个数字最大？",
+                "options": ["4-0-8-2", "9-6-3", "7-2-5", "8023"],
+                "answer": 1, "explain": "6 最大。", "uses": [1],
+                "type": "transform",
+            }],
+        }
+        repaired = {
+            "text": "先前展示的短码中，第二个数字是什么？",
+            "options": ["0", "2", "4", "8"],
+            "answer": 0, "explain": "信息卡 1 的短码是 4082。",
+            "uses": [1], "type": "transform",
+        }
+        review = {
+            "questions": [repaired],
+            "audit": [{
+                "question_no": 1,
+                "memory_required": True,
+                "answerable_without_infos": False,
+                "uses": [1],
+                "verdict": "rewritten",
+                "reason": "答案需要回忆信息卡中的短码。",
+            }],
+        }
+        normalized = (["短码：4082。"], [repaired], ["代码序列"], ["代码定位"])
+
+        with mock.patch("game.gen_ai.chat", side_effect=[
+                json.dumps(draft, ensure_ascii=False),
+                json.dumps(review, ensure_ascii=False),
+        ]) as chat_call, mock.patch(
+                "game.gen_ai.validate", return_value=normalized) as validate_call:
+            game_set = gen_ai.generate_ai(
+                SAMPLE_NAMES, n_infos=1, n_questions=1,
+                api_key="test-key", model="deepseek-v4-flash")
+
+        self.assertEqual(chat_call.call_count, 2)
+        reviewer_messages = chat_call.call_args_list[1].args[2]
+        self.assertIn("独立审阅", reviewer_messages[0]["content"])
+        self.assertIn("忽略分隔符", reviewer_messages[1]["content"])
+        reviewed_draft = validate_call.call_args.args[0]
+        self.assertEqual(reviewed_draft["questions"], [repaired])
+        self.assertIn("双 Agent", game_set["title"])
+
+    def test_review_contract_rejects_any_question_that_remains_answerable_closed_book(self):
+        draft = {"infos": ["短码：4082。"], "questions": []}
+        bad_question = {
+            "text": "忽略分隔符后，哪组短码第二个数字最大？",
+            "options": ["4-0-8-2", "9-6-3", "7-2-5", "8023"],
+            "answer": 1, "explain": "6 最大。", "uses": [1],
+            "type": "transform",
+        }
+        rejected_review = {
+            "questions": [bad_question],
+            "audit": [{
+                "question_no": 1,
+                "memory_required": False,
+                "answerable_without_infos": True,
+                "uses": [1],
+                "verdict": "reject",
+                "reason": "四组选项已经给出全部数字。",
+            }],
+        }
+
+        with self.assertRaisesRegex(gen_ai.AIError, "无需记忆|仅凭题面"):
+            gen_ai.apply_review(draft, rejected_review, n_questions=1)
+
+    def test_review_contract_rejects_mismatched_or_out_of_range_references(self):
+        draft = {"infos": ["短码：4082。"], "questions": []}
+        question = {
+            "text": "先前短码的第二个数字是什么？",
+            "options": ["0", "2", "4", "8"], "answer": 0,
+            "explain": "依据短码信息卡。", "uses": [1],
+            "type": "transform",
+        }
+        audit = {
+            "question_no": 1, "memory_required": True,
+            "answerable_without_infos": False, "uses": [1],
+            "verdict": "pass", "reason": "必须回忆信息卡。",
+        }
+        cases = (([1], [99]), ([99], [99]),
+                 ([True], [True]), ([1, 1], [1, 1]))
+
+        for question_uses, audit_uses in cases:
+            with self.subTest(question_uses=question_uses,
+                              audit_uses=audit_uses):
+                candidate_question = dict(question, uses=question_uses)
+                candidate_audit = dict(audit, uses=audit_uses)
+                with self.assertRaisesRegex(gen_ai.AIError, "引用|信息编号"):
+                    gen_ai.apply_review(
+                        draft,
+                        {"questions": [candidate_question],
+                         "audit": [candidate_audit]},
+                        n_questions=1)
+
     def test_validate_rejects_commute_variants_disguised_as_different_topics(self):
         cards = [
             ("林岚坐地铁到公司要 30 分钟。", "地点关系", "乘地铁上班"),
@@ -413,6 +520,41 @@ class GenerationRaceTests(unittest.TestCase):
         self.assertIs(room.set, current)
         self.assertEqual(room.gen["status"], "error")
         self.assertIn("模型空返回", room.gen["msg"])
+        self.assertIn("未改用本地题库", room.gen["msg"])
+        local_generate.assert_not_called()
+
+    def test_reviewer_failure_keeps_current_set_and_never_uses_local(self):
+        room = engine.Room("2468", engine.default_settings())
+        room.settings.update({"generator": "ai", "api_key": "test-key"})
+        current = {"title": "当前 AI 题库", "source": "deepseek",
+                   "infos": ["保留这一套"], "questions": []}
+        room.set = current
+        room.gen = {"status": "running", "msg": "正在出题"}
+        room.generation_rev = 1
+        generation_sig = room.sig()
+        draft = json.dumps({
+            "infos": [{
+                "text": "短码：4082。", "topic": "代码序列",
+                "family": "代码定位", "person": "", "template": "短码",
+                "dependency_group": "q01",
+            }],
+            "questions": [{
+                "text": "先前短码的第二个数字是什么？",
+                "options": ["0", "2", "4", "8"], "answer": 0,
+                "explain": "依据短码信息卡。", "uses": [1],
+                "type": "transform",
+            }],
+        }, ensure_ascii=False)
+
+        with mock.patch("game.gen_ai.chat", side_effect=[
+                draft, gen_ai.AIError("审阅模型超时")]) as chat_call:
+            with mock.patch("game.engine.gen_local.generate") as local_generate:
+                room._generate(room.generation_rev, generation_sig)
+
+        self.assertEqual(chat_call.call_count, 2)
+        self.assertIs(room.set, current)
+        self.assertEqual(room.gen["status"], "error")
+        self.assertIn("审阅模型超时", room.gen["msg"])
         self.assertIn("未改用本地题库", room.gen["msg"])
         local_generate.assert_not_called()
 

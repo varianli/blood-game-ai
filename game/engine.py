@@ -163,7 +163,7 @@ class Room(object):
             gs = gen_ai.generate_ai(names, s["n_infos"], s["n_questions"],
                                     api_key=s.get("api_key"),
                                     model=s.get("model"))
-            return gs, "DeepSeek 出题成功"
+            return gs, "DeepSeek 双 Agent 出题与独立审阅成功"
         if mode == "polish":
             gs = gen_local.generate(names, s["n_infos"], s["n_questions"],
                                     seed=random.randrange(1 << 30))
